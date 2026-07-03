@@ -1,0 +1,212 @@
+name: bzbots_app
+description: "A new Flutter project."
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+# The following defines the version and build number for your application.
+# A version number is three numbers separated by dots, like 1.2.43
+# followed by an optional build number separated by a +.
+# Both the version and the builder number may be overridden in flutter
+# build by specifying --build-name and --build-number, respectively.
+# In Android, build-name is used as versionName while build-number used as versionCode.
+# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
+# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
+# Read more about iOS versioning at
+# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
+# In Windows, build-name is used as the major, minor, and patch parts
+# of the product and file versions while build-number is used as the build suffix.
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.4
+
+# Dependencies specify other packages that your package needs in order to work.
+# To automatically upgrade your package dependencies to the latest versions
+# consider running `flutter pub upgrade --major-versions`. Alternatively,
+# dependencies can be manually updated by changing the version numbers below to
+# the latest version available on pub.dev. To see which dependencies have newer
+# versions available, run `flutter pub outdated`.
+dependencies:
+  connectivity_plus: ^6.0.0
+  flutter:
+    sdk: flutter
+
+  # The following adds the Cupertino Icons font to your application.
+  # Use with the CupertinoIcons class for iOS style icons.
+  cupertino_icons: ^1.0.8
+  appwrite: ^23.0.0
+  youtube_player_flutter: ^9.1.3
+  shared_preferences: ^2.5.5
+  url_launcher: ^6.3.2
+  flutter_pdfview: ^1.4.4
+  path_provider: ^2.1.5
+  image_picker: ^1.2.1
+  pdf: ^3.12.0
+  printing: ^5.14.3
+  open_filex: ^4.7.0
+  webview_flutter: ^4.13.1
+  flutter_mjpeg: ^2.0.4
+  permission_handler: ^12.0.1
+  flutter_file_downloader: ^2.1.1
+  flutter_screen_recording: ^2.0.25
+  media_kit: ^1.1.11
+  media_kit_video: ^1.2.4
+  media_kit_libs_android_video: ^1.3.5
+  flutter_map: ^4.0.0
+  latlong2: ^0.8.2
+  gal: ^2.3.0
+  share_plus: ^10.0.0
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_launcher_icons: ^0.13.1  # <-- Notre outil est sagement rangé ici
+
+
+  flutter_lints: ^6.0.0
+
+# For information on the generic Dart part of this file, see the
+# following page: https://dart.dev/tools/pub/pubspec
+
+# The following section is specific to Flutter packages.
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/
+    - assets/Fiche_technique_BZ_Light.pdf
+    - assets/Guide_demarrage_rapide_BZ_light.pdf
+    - assets/Manuel_utilisation_BZ_light.pdf
+    - assets/animations/bzlight_intro.webp
+    - assets/images/greased.jpg
+    - assets/images/Air_flow_control.png
+    - assets/icons/bzlight_icon.png
+    - assets/images/tiges.png
+    - assets/Quick_Guide_BZL.pdf
+    - assets/BZL2/bzl_002_eclate.png
+    - assets/BZL2/BZL-021-A.png
+    - assets/BZL2/BZL-021-B.png
+    - assets/BZL2/BZL201.png
+    - assets/BZL2/BZL200.png
+    - assets/BZL2/BZL203.png
+    - assets/BZL2/BZL204.png
+    - assets/BZL2/BZL206.png
+    - assets/BZL2/FIJ-ORN-2.8x1.5.png
+    - assets/BZL2/FIJ-ORN-11x1.5.png
+    - assets/BZL2/FIJ-ORN-28x1.5.png
+    - assets/BZL2/FIQ-RC-15.24-1.4-38.1.png
+    - assets/BZL2/FIV-CTO-M3-10-Z.png
+    - assets/BZL2/FIV-FTO-M3-08-Z.png
+    - assets/BZL2/FIV-ROG-03-I.png
+    - assets/BZL2/BZL202.png
+    - assets/BZL2/FIJ-ORN24x1.png
+    - assets/BZL2/FIV-CHC-M3-12.png
+    - assets/BZL2/FIV-CHC-M3-20.png
+    - assets/BZL3/bzl_003_eclate.png
+    - assets/BZL3/BZL-031A.png
+    - assets/BZL3/BZL-300.png
+    - assets/BZL3/BZL-301.png
+    - assets/BZL3/BZL-302.png
+    - assets/BZL3/BZL-303.png
+    - assets/BZL3/BZL-304.png
+    - assets/BZL3/BZL-305.png
+    - assets/BZL3/BZL-306.png
+    - assets/BZL3/BZL-307.png
+    - assets/BZL3/BZL-308.png
+    - assets/BZL3/BZL-309.png
+    - assets/BZL3/BZL-310.png
+    - assets/BZL3/BZL-311.png
+    - assets/BZL3/BZL-312.png
+    - assets/BZL3/BZL-313.png
+    - assets/BZL3/BZL-314.png
+    - assets/BZL3/BZL-315.png
+    - assets/BZL3/BZL-AC-104.png
+    - assets/BZL3/BZL-AC-105.png
+    - assets/BZL3/FIJ-ORN-3x1.png
+    - assets/BZL3/FIJ-ORN-3.5x1.png
+    - assets/BZL3/FIJ-ORN-16x1.5.png
+    - assets/BZL3/FIJ-ORN-28x1.5.png
+    - assets/BZL3/FIJ-ORS-18x2.png
+    - assets/BZL3/FIT-RBS-626-2RS-I.png
+    - assets/BZL3/FIV-BHC-M6-25-Z.png
+    - assets/BZL3/FIV-CHC-M2-06-B.png
+    - assets/BZL3/FIV-FTO-M3-08-Z.png
+    - assets/BZL3/FIV-FTO-M3-10-Z.png
+    - assets/BZL3/FIV-ROG-06-I.png
+    - assets/BZL3/FTR-CRAV-160VS-EM14.png
+    - assets/BZL3/HPS-08E-124.png
+    - assets/BZL1/bzl_001_eclate.png
+    - assets/BZL1/BZL-011.png
+    - assets/BZL1/BZL-012.png
+    - assets/BZL1/BZL-013.png
+    - assets/BZL1/BZL-100.png
+    - assets/BZL1/BZL-101.png
+    - assets/BZL1/BZL-102.png
+    - assets/BZL1/BZL-103.png
+    - assets/BZL1/BZL-104.png
+    - assets/BZL1/BZL-105.png
+    - assets/BZL1/BZL-106.png
+    - assets/BZL1/BZL-107.png
+    - assets/BZL1/BZL-117.png
+    - assets/BZL1/FIG-CYL-04-10-I.png
+    - assets/BZL1/FIJ-ORN-3x1.png
+    - assets/BZL1/FIJ-ORN-28x1.5.png
+    - assets/BZL1/FIJ-ORN-65x1.png
+    - assets/BZL1/FIQ-RT-7.62-1.4-57.1.png
+    - assets/BZL1/FIT-RBS-626.png
+    - assets/BZL1/FIV-CTO-M3-10-Z.png
+    - assets/BZL1/FIV-CTO-M3-20-Z.png
+    - assets/BZL1/FIV-CTO-M4-16-Z.png
+    - assets/BZL1/FIV-CTO-M4-20-Z.png
+    - assets/BZL1/FIV-FTO-M3-08-Z.png
+    - assets/BZL1/FIV-HC-M4-20-Z.png
+    - assets/BZL1/FIV-HCB-M6-14.png
+    - assets/BZL1/FIV-ROG-03-I.png
+    - assets/BZL1/FIV-ROG-04-I.png
+    - assets/BZL1/FIV-ROG-05.png
+    - assets/Camera_module_replacement.pdf
+    - assets/Changement_module_arriere.pdf
+    - assets/DN100_65_cote.png
+    - assets/DN125_65_cote.png
+    - assets/DN160_75_cote.png
+    - assets/DN200_75_cote.png
+    - assets/DN250_75_cote.png
+    - assets/logo.png
+    - assets/Boule_beton.png
+    - assets/cloche.png
+    - assets/BZL_AC_011.png
+    - assets/BZL-011.png
+    - assets/BZL-011-B.png
+    - assets/BZL-A-107.png
+    - assets/BZL-A-108.png
+    - assets/BZL-AC-030.png
+    - assets/BZL-AC-032-A.png
+    - assets/BZL-AC-032-B.png
+    - assets/BZL-ASD-010.png
+    - assets/BZL-ASD-109.png
+    - assets/Purge.png
+    - assets/module_arriere.png
+    - assets/modeCVBS.png
+    - assets/OCD-75-2-D.png
+    - assets/OCD-65-2-D.png
+
+
+
+flutter_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/logo.png"
+  min_sdk_android: 21 # Optionnel mais recommandé
+
+
+  fonts:
+    - family: NotoSans
+      fonts:
+        - asset: assets/NotoSans-Regular.ttf
+        - asset: assets/NotoSansKR-Regular.ttf
+        - asset: assets/NotoSansJP-Regular.ttf
+        - asset: assets/NotoSansSC-Regular.ttf
+        - asset: assets/Rubik-Regular.ttf
+        - asset: assets/GoogleSans-Regular.ttf
+        - asset: assets/NotoSans-Italic.ttf
+          style: italic
