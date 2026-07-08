@@ -30,7 +30,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
   final _service = PumpService();
 
   // ── Connexion Pi ──────────────────────────────
-  static const String _piBase = 'http://192.168.5.37:5000';
+  static const String _piBase = 'http://192.168.5.73:5000';
   bool _piConnected = false;
 
   Future<void> _sendCmd(String cmd) async {

@@ -1,9 +1,11 @@
 // ignore_for_file: deprecated_member_use
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:appwrite/models.dart' as models;
+import 'pump_debug_screen.dart';
 
 class PumpControlScreen extends StatefulWidget {
   final models.Document canalisationDoc;
@@ -51,6 +53,12 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
     }
   }
 
+  // Convertit le débit commandé (0 – 0.8 L/min) en pourcentage PWM (0 – 100)
+  // À ajuster si la correspondance réelle débit/PWM du moteur diffère.
+  int _debitToPwmPercent() {
+    return ((_debitCommand / 0.8) * 100).round().clamp(0, 100);
+  }
+
   Future<void> _checkPiConnection() async {
     try {
       final resp = await http.get(
@@ -60,6 +68,51 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
     } catch (_) {
       setState(() => _piConnected = false);
     }
+  }
+
+  // ── Télémétrie réelle (moteur pompe A) ────────────
+  bool _arduinoConnected = false;
+  int _consecutiveFailures = 0;
+
+  Future<void> _fetchTelemetry() async {
+    try {
+      final resp = await http.get(
+        Uri.parse('${widget.piBase}/telemetry'),
+      ).timeout(const Duration(seconds: 2));
+
+      if (!mounted) return;
+
+      if (resp.statusCode == 200) {
+        final data = json.decode(resp.body) as Map<String, dynamic>;
+        setState(() {
+          _consecutiveFailures = 0;
+          // Le Pi a répondu : il est bien joignable, quel que soit l'état de l'Arduino
+          _piConnected = true;
+          // État séparé : est-ce que l'Arduino transmet des données fraîches ?
+          _arduinoConnected = data['connected'] == true;
+          _consoMoteurA = (data['consoMoteurA_percent'] as num?)?.toDouble()
+              ?? _consoMoteurA;
+        });
+      } else {
+        _registerFailure();
+      }
+    } catch (_) {
+      // Erreur réseau/timeout : peut être une micro-coupure ponctuelle,
+      // on ne bascule "hors ligne" qu'après plusieurs échecs d'affilée.
+      if (!mounted) return;
+      _registerFailure();
+    }
+  }
+
+  void _registerFailure() {
+    if (!mounted) return;
+    setState(() {
+      _consecutiveFailures++;
+      if (_consecutiveFailures >= 2) {
+        _piConnected = false;
+        _arduinoConnected = false;
+      }
+    });
   }
 
   // ── Commandes opérateur ───────────────────────
@@ -86,29 +139,77 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
 
   final _random = math.Random();
   Timer? _timer;
+  Timer? _telemetryTimer;
+
+  final TextEditingController _debitFieldCtrl = TextEditingController();
+  final TextEditingController _vitesseFieldCtrl = TextEditingController();
+  final FocusNode _debitFocus = FocusNode();
+  final FocusNode _vitesseFocus = FocusNode();
 
   @override
   void initState() {
     super.initState();
     _metersLeft = widget.longueur;
     _resinConso = widget.passesDone * widget.qteParPasse;
+    _debitFieldCtrl.text = _debitCommand.toStringAsFixed(2);
+    _vitesseFieldCtrl.text = _vitesseCommand.toStringAsFixed(2);
+    _debitFocus.addListener(() {
+      if (!_debitFocus.hasFocus) _applyDebitInput(_debitFieldCtrl.text);
+    });
+    _vitesseFocus.addListener(() {
+      if (!_vitesseFocus.hasFocus) _applyVitesseInput(_vitesseFieldCtrl.text);
+    });
     _checkPiConnection();
     _startTimer();
+    _fetchTelemetry();
+    _telemetryTimer = Timer.periodic(
+        const Duration(seconds: 1), (_) => _fetchTelemetry());
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _telemetryTimer?.cancel();
+    _debitFieldCtrl.dispose();
+    _vitesseFieldCtrl.dispose();
+    _debitFocus.dispose();
+    _vitesseFocus.dispose();
     super.dispose();
+  }
+
+  // Applique une valeur de débit saisie manuellement (clavier)
+  void _applyDebitInput(String text) {
+    final parsed = double.tryParse(text.replaceAll(',', '.'));
+    if (parsed == null) {
+      _debitFieldCtrl.text = _debitCommand.toStringAsFixed(2);
+      return;
+    }
+    final clamped = parsed.clamp(0.0, 0.8);
+    setState(() => _debitCommand = clamped);
+    _debitFieldCtrl.text = clamped.toStringAsFixed(2);
+    if (_isPumpOn) _sendCmd('SPEED=${_debitToPwmPercent()}');
+  }
+
+  // Applique une valeur de vitesse saisie manuellement (clavier)
+  void _applyVitesseInput(String text) {
+    final parsed = double.tryParse(text.replaceAll(',', '.'));
+    if (parsed == null) {
+      _vitesseFieldCtrl.text = _vitesseCommand.toStringAsFixed(2);
+      return;
+    }
+    final clamped = parsed.clamp(0.0, 1.2);
+    setState(() => _vitesseCommand = clamped);
+    _vitesseFieldCtrl.text = clamped.toStringAsFixed(2);
   }
 
   void _startTimer() {
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       setState(() {
-        // ── Télémétrie simulée ─────────────────
+        // ── Télémétrie simulée (pompe B, débit, températures) ──
+        // Note : _consoMoteurA n'est plus simulé ici, il vient du
+        // capteur réel via _fetchTelemetry() / _telemetryTimer.
         if (_isPumpOn) {
-          _consoMoteurA = 40.0 + (_debitCommand * 50) + _random.nextDouble() * 5;
           _consoMoteurB = 42.0 + (_debitCommand * 50) + _random.nextDouble() * 5;
           _debitReel    = _debitCommand > 0
               ? (_debitCommand - 0.02 + _random.nextDouble() * 0.04).clamp(0, double.infinity)
@@ -116,7 +217,6 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
           if (_tempNourriceResine < 35.0)     _tempNourriceResine     += 0.05;
           if (_tempNourriceDurcisseur < 35.0) _tempNourriceDurcisseur += 0.05;
         } else {
-          _consoMoteurA = 0.0;
           _consoMoteurB = 0.0;
           _debitReel    = 0.0;
         }
@@ -133,7 +233,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
           // Passe terminée automatiquement
           if (_metersLeft <= 0.001) {
             _isPumpOn = false;
-            _sendCmd('6');
+            _sendCmd('SPEED=0');
             _timer?.cancel();
             _showPasseTermineeDialog();
           }
@@ -144,7 +244,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
 
   void _togglePump() {
     setState(() => _isPumpOn = !_isPumpOn);
-    _sendCmd(_isPumpOn ? '1' : '6');
+    _sendCmd(_isPumpOn ? 'SPEED=${_debitToPwmPercent()}' : 'SPEED=0');
   }
 
   String _fmt(double mins) {
@@ -237,7 +337,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
       ),
     );
     if (confirm == true && mounted) {
-      _sendCmd('6');
+      _sendCmd('SPEED=0');
       Navigator.pop(context, false); // retour sans valider la passe
     }
   }
@@ -285,6 +385,16 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
           ]),
         ]),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.bug_report, color: Colors.white70, size: 20),
+            tooltip: 'Debug Arduino/Pi',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => PumpDebugScreen(piBase: widget.piBase),
+              ),
+            ),
+          ),
           Container(
               margin: const EdgeInsets.only(right: 12),
               padding:
@@ -326,12 +436,16 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
           _buildProgressBar(),
           const SizedBox(height: 14),
 
-          // ── Contrôles + Métriques ───────────────
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Expanded(flex: 5, child: _buildOperatorCommands()),
-            const SizedBox(width: 14),
-            Expanded(flex: 7, child: _buildMetrics()),
-          ]),
+          // ── Contrôles (bouton marche/arrêt) ─────
+          _buildOperatorCommands(),
+          const SizedBox(height: 14),
+
+          // ── Commandes de vitesse (pleine largeur) ──
+          _buildSpeedControls(),
+          const SizedBox(height: 14),
+
+          // ── Métriques (débit mesuré + réservoirs) ──
+          _buildMetrics(),
           const SizedBox(height: 14),
 
           // ── Supervision hardware ────────────────
@@ -408,12 +522,16 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
               color: Colors.grey[600],
               fontSize: 7,
               fontWeight: FontWeight.w700),
-          textAlign: TextAlign.center),
+          textAlign: TextAlign.center,
+          overflow: TextOverflow.ellipsis),
       const SizedBox(height: 3),
-      Text(value,
-          style: TextStyle(
-              color: color, fontSize: 11, fontWeight: FontWeight.w900),
-          textAlign: TextAlign.center),
+      FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text(value,
+            style: TextStyle(
+                color: color, fontSize: 11, fontWeight: FontWeight.w900),
+            textAlign: TextAlign.center),
+      ),
     ]));
   }
 
@@ -466,6 +584,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
             ),
             child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
                 children: [
               Icon(
                 _isPumpOn ? Icons.stop_circle : Icons.play_circle,
@@ -473,91 +592,185 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
                 size: 22,
               ),
               const SizedBox(width: 8),
-              Text(
-                _isPumpOn ? 'ARRÊTER MOTEUR' : 'DÉMARRER MOTEUR',
-                style: TextStyle(
-                    color:
-                        _isPumpOn ? Colors.redAccent : Colors.greenAccent,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.5),
+              Flexible(
+                child: Text(
+                  _isPumpOn ? 'ARRÊTER MOTEUR' : 'DÉMARRER MOTEUR',
+                  style: TextStyle(
+                      color: _isPumpOn ? Colors.redAccent : Colors.greenAccent,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.5),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ]),
           ),
         ),
+      ]),
+    );
+  }
+
+  // ── Commandes de vitesse (pleine largeur, sous les cuves) ──
+  Widget _buildSpeedControls() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+          color: const Color(0xFF0A0A0F),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+              color: const Color(0xFF22D3EE).withOpacity(0.2))),
+      child: Column(children: [
+        Row(children: [
+          const Icon(Icons.speed, color: Color(0xFF22D3EE), size: 13),
+          const SizedBox(width: 6),
+          Text('COMMANDES DE VITESSE',
+              style: TextStyle(
+                  color: Colors.grey[400],
+                  fontSize: 8,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1.5)),
+        ]),
         const SizedBox(height: 16),
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Débit
+          Expanded(child: Column(children: [
+            SpeedometerGauge(
+              currentSpeed: _debitCommand,
+              maxSpeed: 0.8,
+              unit: 'L/min',
+              color: const Color(0xFF22D3EE),
+              size: 170,
+            ),
+            const SizedBox(height: 6),
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.water_drop, color: Color(0xFF22D3EE), size: 13),
+              const SizedBox(width: 4),
+              Text('Débit',
+                  style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+            ]),
+            const SizedBox(height: 3),
+            SizedBox(
+              width: 110,
+              child: TextField(
+                controller: _debitFieldCtrl,
+                focusNode: _debitFocus,
+                textAlign: TextAlign.center,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                style: const TextStyle(
+                    color: Color(0xFF22D3EE),
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13),
+                decoration: InputDecoration(
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(
+                      vertical: 6, horizontal: 8),
+                  suffixText: 'L/min',
+                  suffixStyle:
+                      TextStyle(color: Colors.grey[500], fontSize: 9),
+                  filled: true,
+                  fillColor: Colors.black45,
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                          color: const Color(0xFF22D3EE).withOpacity(0.3))),
+                ),
+                onSubmitted: _applyDebitInput,
+              ),
+            ),
+            const SizedBox(height: 6),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 5.0,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8.0),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 16.0),
+              ),
+              child: Slider(
+                value: _debitCommand,
+                min: 0.0,
+                max: 0.8,
+                divisions: 80,
+                activeColor: const Color(0xFF22D3EE),
+                inactiveColor: Colors.grey[800],
+                onChanged: (val) => setState(() {
+                  _debitCommand = val;
+                  if (!_debitFocus.hasFocus) {
+                    _debitFieldCtrl.text = val.toStringAsFixed(2);
+                  }
+                }),
+                onChangeEnd: (val) {
+                  if (_isPumpOn) _sendCmd('SPEED=${_debitToPwmPercent()}');
+                },
+              ),
+            ),
+          ])),
 
-        // ── Slider Débit ────────────────────────
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Row(children: [
-            const Icon(Icons.water_drop,
-                color: Color(0xFF22D3EE), size: 11),
-            const SizedBox(width: 4),
-            Text('Débit Pompe',
-                style: TextStyle(
-                    color: Colors.grey[400], fontSize: 10)),
-          ]),
-          Text('${_debitCommand.toStringAsFixed(2)} L/min',
-              style: const TextStyle(
-                  color: Color(0xFF22D3EE),
-                  fontWeight: FontWeight.w900,
-                  fontSize: 11)),
-        ]),
-        SliderTheme(
-          data: SliderTheme.of(context).copyWith(
-            trackHeight: 4.0,
-            thumbShape:
-                const RoundSliderThumbShape(enabledThumbRadius: 7.0),
-            overlayShape:
-                const RoundSliderOverlayShape(overlayRadius: 14.0),
-          ),
-          child: Slider(
-            value: _debitCommand,
-            min: 0.0,
-            max: 0.8,
-            divisions: 80,
-            activeColor: const Color(0xFF22D3EE),
-            inactiveColor: Colors.grey[800],
-            onChanged: (val) => setState(() => _debitCommand = val),
-          ),
-        ),
-        const Divider(color: Colors.white12, height: 16),
+          const SizedBox(width: 16),
 
-        // ── Speedometer + Slider Vitesse ────────
-        Center(child: SpeedometerGauge(currentSpeed: _vitesseCommand)),
-        const SizedBox(height: 6),
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Row(children: [
-            const Icon(Icons.speed, color: Color(0xFFEAB308), size: 11),
-            const SizedBox(width: 4),
-            Text('Vitesse Tracteur',
-                style: TextStyle(
-                    color: Colors.grey[400], fontSize: 10)),
-          ]),
-          Text('${_vitesseCommand.toStringAsFixed(2)} m/min',
-              style: const TextStyle(
-                  color: Color(0xFFEAB308),
-                  fontWeight: FontWeight.w900,
-                  fontSize: 11)),
+          // Vitesse
+          Expanded(child: Column(children: [
+            SpeedometerGauge(currentSpeed: _vitesseCommand, size: 170),
+            const SizedBox(height: 6),
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.speed, color: Color(0xFFEAB308), size: 13),
+              const SizedBox(width: 4),
+              Text('Vitesse',
+                  style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+            ]),
+            const SizedBox(height: 3),
+            SizedBox(
+              width: 110,
+              child: TextField(
+                controller: _vitesseFieldCtrl,
+                focusNode: _vitesseFocus,
+                textAlign: TextAlign.center,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                style: const TextStyle(
+                    color: Color(0xFFEAB308),
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13),
+                decoration: InputDecoration(
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(
+                      vertical: 6, horizontal: 8),
+                  suffixText: 'm/min',
+                  suffixStyle:
+                      TextStyle(color: Colors.grey[500], fontSize: 9),
+                  filled: true,
+                  fillColor: Colors.black45,
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                          color: const Color(0xFFEAB308).withOpacity(0.3))),
+                ),
+                onSubmitted: _applyVitesseInput,
+              ),
+            ),
+            const SizedBox(height: 6),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 5.0,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8.0),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 16.0),
+              ),
+              child: Slider(
+                value: _vitesseCommand,
+                min: 0.0,
+                max: 1.2,
+                divisions: 120,
+                activeColor: const Color(0xFFEAB308),
+                inactiveColor: Colors.grey[800],
+                onChanged: (val) => setState(() {
+                  _vitesseCommand = val;
+                  if (!_vitesseFocus.hasFocus) {
+                    _vitesseFieldCtrl.text = val.toStringAsFixed(2);
+                  }
+                }),
+              ),
+            ),
+          ])),
         ]),
-        SliderTheme(
-          data: SliderTheme.of(context).copyWith(
-            trackHeight: 4.0,
-            thumbShape:
-                const RoundSliderThumbShape(enabledThumbRadius: 7.0),
-            overlayShape:
-                const RoundSliderOverlayShape(overlayRadius: 14.0),
-          ),
-          child: Slider(
-            value: _vitesseCommand,
-            min: 0.0,
-            max: 1.2,
-            divisions: 120,
-            activeColor: const Color(0xFFEAB308),
-            inactiveColor: Colors.grey[800],
-            onChanged: (val) => setState(() => _vitesseCommand = val),
-          ),
-        ),
       ]),
     );
   }
@@ -609,14 +822,16 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
                 label: 'RÉSINE',
                 fillRatio: fillRatio,
                 color: Colors.purpleAccent,
-                isSensorOk: _niveauResineOk)),
+                isSensorOk: _niveauResineOk,
+                capacityLiters: 6.5)),
         const SizedBox(width: 10),
         Expanded(
             child: TankLevelGauge(
                 label: 'DURCIS.',
                 fillRatio: fillRatio,
                 color: const Color(0xFF22D3EE),
-                isSensorOk: _niveauDurcisseurOk)),
+                isSensorOk: _niveauDurcisseurOk,
+                capacityLiters: 3.25)),
       ]),
     ]);
   }
@@ -624,55 +839,49 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
   // ── Supervision hardware ───────────────────────
   Widget _buildHardwareSupervision() {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
           color: const Color(0xFF101015),
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(
               color: const Color(0xFF22D3EE).withOpacity(0.3))),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          const Icon(Icons.memory, color: Color(0xFF22D3EE), size: 16),
-          const SizedBox(width: 8),
+          const Icon(Icons.memory, color: Color(0xFF22D3EE), size: 13),
+          const SizedBox(width: 6),
           Text('SUPERVISION HARDWARE',
               style: TextStyle(
                   color: Colors.cyan[100],
-                  fontSize: 10,
+                  fontSize: 9,
                   fontWeight: FontWeight.w900,
-                  letterSpacing: 2)),
+                  letterSpacing: 1.5)),
         ]),
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 12),
-          child: Divider(color: Colors.white12, height: 1),
-        ),
+        const SizedBox(height: 8),
+        const Divider(color: Colors.white12, height: 1),
+        const SizedBox(height: 8),
 
         // Jauges moteurs
-        _buildMotorGauge('EFFORT MOTEUR POMPE A', _consoMoteurA),
-        const SizedBox(height: 12),
-        _buildMotorGauge('EFFORT MOTEUR POMPE B', _consoMoteurB),
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(child: _buildMotorGauge('POMPE A', _consoMoteurA)),
+          const SizedBox(width: 14),
+          Expanded(child: _buildMotorGauge('POMPE B', _consoMoteurB)),
+        ]),
 
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 16),
-          child: Divider(color: Colors.white12, height: 1),
-        ),
+        const SizedBox(height: 8),
+        const Divider(color: Colors.white12, height: 1),
+        const SizedBox(height: 8),
 
-        // Températures
+        // Températures — 2 colonnes x 2 lignes
         Row(children: [
-          Expanded(
-              child: _buildTempBadge(
-                  'Nourrice Résine', _tempNourriceResine)),
-          const SizedBox(width: 8),
-          Expanded(
-              child: _buildTempBadge(
-                  'Nourrice Durcis.', _tempNourriceDurcisseur)),
-          const SizedBox(width: 8),
-          Expanded(
-              child:
-                  _buildTempBadge('Couverture 1', _tempCouverture1)),
-          const SizedBox(width: 8),
-          Expanded(
-              child:
-                  _buildTempBadge('Couverture 2', _tempCouverture2)),
+          Expanded(child: _buildTempBadge('Nourrice Résine',  _tempNourriceResine,     iconColor: const Color(0xFFA855F7))),
+          const SizedBox(width: 6),
+          Expanded(child: _buildTempBadge('Nourrice Durcis.', _tempNourriceDurcisseur, iconColor: const Color(0xFF22D3EE))),
+        ]),
+        const SizedBox(height: 6),
+        Row(children: [
+          Expanded(child: _buildTempBadge('Couverture 1', _tempCouverture1, iconColor: const Color(0xFFA855F7))),
+          const SizedBox(width: 6),
+          Expanded(child: _buildTempBadge('Couverture 2', _tempCouverture2, iconColor: const Color(0xFF22D3EE))),
         ]),
       ]),
     );
@@ -697,54 +906,67 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
         : percent > 60.0
             ? Colors.orangeAccent
             : Colors.greenAccent;
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Text(label,
-            style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 9,
-                fontWeight: FontWeight.bold)),
-        Text('${percent.toInt()}%',
+    return Row(children: [
+      Expanded(
+        flex: 5,
+        child: Text(label,
+            style: TextStyle(
+                color: Colors.grey[500],
+                fontSize: 8,
+                fontWeight: FontWeight.w700),
+            overflow: TextOverflow.ellipsis),
+      ),
+      const SizedBox(width: 8),
+      Expanded(
+        flex: 9,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(3),
+          child: LinearProgressIndicator(
+            value: percent / 100,
+            backgroundColor: Colors.white.withOpacity(0.05),
+            color: barColor,
+            minHeight: 5,
+          ),
+        ),
+      ),
+      const SizedBox(width: 6),
+      SizedBox(
+        width: 30,
+        child: Text('${percent.toInt()}%',
             style: TextStyle(
                 color: barColor,
-                fontSize: 12,
-                fontWeight: FontWeight.w900)),
-      ]),
-      const SizedBox(height: 6),
-      ClipRRect(
-        borderRadius: BorderRadius.circular(4),
-        child: LinearProgressIndicator(
-          value: percent / 100,
-          backgroundColor: Colors.white.withOpacity(0.05),
-          color: barColor,
-          minHeight: 8,
-        ),
+                fontSize: 9,
+                fontWeight: FontWeight.w900),
+            textAlign: TextAlign.right),
       ),
     ]);
   }
 
-  Widget _buildTempBadge(String label, double temp) {
+  Widget _buildTempBadge(String label, double temp, {Color iconColor = const Color(0xFFA855F7)}) {
     return Container(
-      padding: const EdgeInsets.all(8),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
           color: Colors.black45,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.white12)),
-      child: Column(children: [
-        Icon(Icons.thermostat, color: Colors.orange[400], size: 16),
-        const SizedBox(height: 4),
-        Text('${temp.toStringAsFixed(1)}°C',
-            style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.bold)),
-        const SizedBox(height: 2),
-        Text(label,
-            style: TextStyle(
-                color: Colors.grey[500],
-                fontSize: 7,
-                fontWeight: FontWeight.w700),
-            textAlign: TextAlign.center),
+          border: Border.all(color: iconColor.withOpacity(0.25))),
+      child: Row(children: [
+        Icon(Icons.thermostat, color: iconColor, size: 13),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label,
+                style: TextStyle(
+                    color: Colors.grey[500],
+                    fontSize: 7,
+                    fontWeight: FontWeight.w700),
+                overflow: TextOverflow.ellipsis),
+            Text('${temp.toStringAsFixed(1)}°C',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold)),
+          ]),
+        ),
       ]),
     );
   }
@@ -757,40 +979,46 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
 class SpeedometerGauge extends StatelessWidget {
   final double currentSpeed;
   final double maxSpeed;
+  final String unit;
+  final Color color;
+  final double size;
 
   const SpeedometerGauge({
     super.key,
     required this.currentSpeed,
     this.maxSpeed = 1.2,
+    this.unit = 'm/min',
+    this.color = const Color(0xFFEAB308),
+    this.size = 120,
   });
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 120,
-      height: 120,
-      child: CustomPaint(
-        painter: _SpeedometerPainter(currentSpeed, maxSpeed),
-        child: Center(
-          child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-            const SizedBox(height: 20),
-            Text(
-              currentSpeed.toStringAsFixed(2),
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w900),
-            ),
-            Text('m/min',
-                style: TextStyle(
-                    color: Colors.grey[500],
-                    fontSize: 9,
-                    fontWeight: FontWeight.bold)),
-          ]),
+    final scale = size / 120;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: size,
+          height: size,
+          child: CustomPaint(
+            painter: _SpeedometerPainter(currentSpeed, maxSpeed, color),
+          ),
         ),
-      ),
+        SizedBox(height: 4 * scale),
+        Text(
+          currentSpeed.toStringAsFixed(2),
+          style: TextStyle(
+              color: color,
+              fontSize: 16 * scale,
+              fontWeight: FontWeight.w900),
+        ),
+        Text(unit,
+            style: TextStyle(
+                color: Colors.grey[500],
+                fontSize: 9 * scale,
+                fontWeight: FontWeight.bold)),
+      ],
     );
   }
 }
@@ -798,7 +1026,8 @@ class SpeedometerGauge extends StatelessWidget {
 class _SpeedometerPainter extends CustomPainter {
   final double speed;
   final double maxSpeed;
-  _SpeedometerPainter(this.speed, this.maxSpeed);
+  final Color color;
+  _SpeedometerPainter(this.speed, this.maxSpeed, this.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -824,7 +1053,7 @@ class _SpeedometerPainter extends CustomPainter {
       Rect.fromCircle(center: center, radius: radius - 6),
       startAngle, progress, false,
       Paint()
-        ..color = const Color(0xFFEAB308)
+        ..color = color
         ..style = PaintingStyle.stroke
         ..strokeWidth = 8
         ..strokeCap = StrokeCap.round,
@@ -842,13 +1071,13 @@ class _SpeedometerPainter extends CustomPainter {
           ..strokeWidth = 3
           ..strokeCap = StrokeCap.round);
 
-    canvas.drawCircle(center, 4, Paint()..color = const Color(0xFFEAB308));
+    canvas.drawCircle(center, 4, Paint()..color = color);
     canvas.drawCircle(center, 2, Paint()..color = Colors.black);
   }
 
   @override
   bool shouldRepaint(covariant _SpeedometerPainter old) =>
-      old.speed != speed;
+      old.speed != speed || old.color != color;
 }
 
 class TankLevelGauge extends StatelessWidget {
@@ -856,6 +1085,7 @@ class TankLevelGauge extends StatelessWidget {
   final double fillRatio;
   final Color color;
   final bool isSensorOk;
+  final double capacityLiters;
 
   const TankLevelGauge({
     super.key,
@@ -863,6 +1093,7 @@ class TankLevelGauge extends StatelessWidget {
     required this.fillRatio,
     required this.color,
     required this.isSensorOk,
+    required this.capacityLiters,
   });
 
   @override
@@ -877,67 +1108,69 @@ class TankLevelGauge extends StatelessWidget {
               fontSize: 10,
               fontWeight: FontWeight.bold)),
       const SizedBox(height: 8),
-      Container(
-        height: 120,
-        width: 55,
-        decoration: BoxDecoration(
-            color: const Color(0xFF0A0A0F),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white24, width: 2),
-            boxShadow: [
-              BoxShadow(
-                  color: themeColor.withOpacity(0.15),
-                  blurRadius: 10,
-                  spreadRadius: 1)
-            ]),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(10),
-          child: Stack(alignment: Alignment.bottomCenter, children: [
-            FractionallySizedBox(
-              heightFactor: displayRatio,
-              widthFactor: 1.0,
-              child: Container(
-                decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                      themeColor.withOpacity(0.6),
-                      themeColor
-                    ])),
-                child: Align(
-                    alignment: Alignment.topCenter,
-                    child: Container(height: 2, color: Colors.white54)),
-              ),
-            ),
-            Positioned(
-              left: 4, top: 4, bottom: 4,
-              width: 12,
-              child: Container(
+      LayoutBuilder(builder: (context, constraints) {
+        final w = (constraints.maxWidth * 0.7).clamp(40.0, 70.0);
+        return Container(
+          height: 120,
+          width: w,
+          decoration: BoxDecoration(
+              color: const Color(0xFF0A0A0F),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white24, width: 2),
+              boxShadow: [
+                BoxShadow(
+                    color: themeColor.withOpacity(0.15),
+                    blurRadius: 10,
+                    spreadRadius: 1)
+              ]),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Stack(alignment: Alignment.bottomCenter, children: [
+              FractionallySizedBox(
+                heightFactor: displayRatio,
+                widthFactor: 1.0,
+                child: Container(
                   decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(10))),
-            ),
-            Center(
-              child: isSensorOk
-                  ? Text('${(displayRatio * 100).toInt()}%',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w900,
-                          shadows: [
-                            Shadow(color: Colors.black, blurRadius: 4)
-                          ]))
-                  : const Icon(Icons.warning_amber_rounded,
-                      color: Colors.white, size: 28),
-            ),
-          ]),
-        ),
-      ),
+                      gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                        themeColor.withOpacity(0.6),
+                        themeColor
+                      ])),
+                  child: Align(
+                      alignment: Alignment.topCenter,
+                      child: Container(height: 2, color: Colors.white54)),
+                ),
+              ),
+              Positioned(
+                left: 4, top: 4, bottom: 4,
+                width: 12,
+                child: Container(
+                    decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(10))),
+              ),
+              Center(
+                child: isSensorOk
+                    ? Text('${(displayRatio * capacityLiters).toStringAsFixed(2)} L',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w900,
+                            shadows: [
+                              Shadow(color: Colors.black, blurRadius: 4)
+                            ]))
+                    : const Icon(Icons.warning_amber_rounded,
+                        color: Colors.white, size: 28),
+              ),
+            ]),
+          ),
+        );
+      }),
       const SizedBox(height: 8),
       Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
         decoration: BoxDecoration(
             color: isSensorOk
                 ? Colors.green.withOpacity(0.2)
@@ -946,8 +1179,7 @@ class TankLevelGauge extends StatelessWidget {
         child: Text(
           isSensorOk ? 'OK' : 'VIDE',
           style: TextStyle(
-              color:
-                  isSensorOk ? Colors.greenAccent : Colors.redAccent,
+              color: isSensorOk ? Colors.greenAccent : Colors.redAccent,
               fontSize: 9,
               fontWeight: FontWeight.w900),
         ),
