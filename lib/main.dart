@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'screens/login_screen.dart';
@@ -9,6 +10,13 @@ import 'services/lang_service.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+
+  // Masque la barre de navigation Android (garde la barre du haut : heure, batterie…)
+  await SystemChrome.setEnabledSystemUIMode(
+    SystemUiMode.immersiveSticky,
+    overlays: [SystemUiOverlay.top],
+  );
+
   await LangService().init();
   runApp(const BZBotsApp());
 }
@@ -25,13 +33,31 @@ class BZBotsApp extends StatefulWidget {
   State<BZBotsApp> createState() => _BZBotsAppState();
 }
 
-class _BZBotsAppState extends State<BZBotsApp> {
+class _BZBotsAppState extends State<BZBotsApp> with WidgetsBindingObserver {
   final _lang = LangService();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _lang.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // L'OS réaffiche parfois la barre de navigation au retour au premier plan
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.immersiveSticky,
+        overlays: [SystemUiOverlay.top],
+      );
+    }
   }
 
   void rebuild() => setState(() {});

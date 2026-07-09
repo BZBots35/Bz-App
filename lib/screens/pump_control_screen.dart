@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:appwrite/models.dart' as models;
 import 'pump_debug_screen.dart';
+import '../services/lang_service.dart';
 
 class PumpControlScreen extends StatefulWidget {
   final models.Document canalisationDoc;
@@ -36,6 +37,8 @@ class PumpControlScreen extends StatefulWidget {
 }
 
 class _PumpControlScreenState extends State<PumpControlScreen> {
+
+  final _lang = LangService();
 
   // ── Connexion Pi ──────────────────────────────
   bool _piConnected = false;
@@ -92,6 +95,9 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
           _arduinoConnected = data['connected'] == true;
           _consoMoteurA = (data['consoMoteurA_percent'] as num?)?.toDouble()
               ?? _consoMoteurA;
+          _consoMoteurB = (data['consoMoteurB_percent'] as num?)?.toDouble()
+              ?? _consoMoteurB;
+          _debitReel = (data['debit'] as num?)?.toDouble() ?? _debitReel;
         });
       } else {
         _registerFailure();
@@ -126,7 +132,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
   double _timeElapsed = 0;
   double _resinConso  = 0;
 
-  // ── Télémétrie simulée ────────────────────────
+  // ── Télémétrie : A/B réels via Arduino, reste simulé ──
   double _consoMoteurA            = 0.0;
   double _consoMoteurB            = 0.0;
   bool   _niveauResineOk          = true;
@@ -149,6 +155,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
   @override
   void initState() {
     super.initState();
+    _lang.addListener(() { if (mounted) setState(() {}); });
     _metersLeft = widget.longueur;
     _resinConso = widget.passesDone * widget.qteParPasse;
     _debitFieldCtrl.text = _debitCommand.toStringAsFixed(2);
@@ -206,19 +213,12 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       setState(() {
-        // ── Télémétrie simulée (pompe B, débit, températures) ──
-        // Note : _consoMoteurA n'est plus simulé ici, il vient du
-        // capteur réel via _fetchTelemetry() / _telemetryTimer.
+        // ── Températures simulées (pas encore de capteur physique) ──
+        // Note : _consoMoteurA, _consoMoteurB et _debitReel ne sont plus
+        // simulés ici, ils viennent du capteur réel via _fetchTelemetry().
         if (_isPumpOn) {
-          _consoMoteurB = 42.0 + (_debitCommand * 50) + _random.nextDouble() * 5;
-          _debitReel    = _debitCommand > 0
-              ? (_debitCommand - 0.02 + _random.nextDouble() * 0.04).clamp(0, double.infinity)
-              : 0.0;
           if (_tempNourriceResine < 35.0)     _tempNourriceResine     += 0.05;
           if (_tempNourriceDurcisseur < 35.0) _tempNourriceDurcisseur += 0.05;
-        } else {
-          _consoMoteurB = 0.0;
-          _debitReel    = 0.0;
         }
 
         // ── Avancement tracteur ────────────────
@@ -263,18 +263,20 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(20),
             side: BorderSide(color: Colors.green.withOpacity(0.5), width: 1)),
-        title: const Row(children: [
-          Icon(Icons.check_circle, color: Colors.green, size: 22),
-          SizedBox(width: 8),
-          Text('PASSE TERMINÉE',
-              style: TextStyle(
+        title: Row(children: [
+          const Icon(Icons.check_circle, color: Colors.green, size: 22),
+          const SizedBox(width: 8),
+          Text(_lang.t('pumpPassCompleteTitle'),
+              style: const TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.w900,
                   fontSize: 14)),
         ]),
         content: Text(
-          'La passe N°${widget.passNum} est complète.\n'
-          '${_metersDone.toStringAsFixed(2)} m résinés en ${_fmt(_timeElapsed)}.',
+          '${_lang.t('pumpPassCompletePrefix')}${widget.passNum}'
+          '${_lang.t('pumpPassCompleteSuffix')}\n'
+          '${_metersDone.toStringAsFixed(2)} ${_lang.t('pumpMetersResinedIn')} '
+          '${_fmt(_timeElapsed)}.',
           style: TextStyle(color: Colors.grey[400], fontSize: 12, height: 1.5),
         ),
         actions: [
@@ -288,8 +290,8 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10))),
-            child: const Text('RETOUR AUX PASSES',
-                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11)),
+            child: Text(_lang.t('pumpBackToPassesBtn'),
+                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11)),
           ),
         ],
       ),
@@ -305,24 +307,25 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(20),
             side: BorderSide(color: Colors.orange.withOpacity(0.5))),
-        title: const Row(children: [
-          Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 20),
-          SizedBox(width: 8),
-          Text('QUITTER LA PASSE ?',
-              style: TextStyle(
+        title: Row(children: [
+          const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 20),
+          const SizedBox(width: 8),
+          Text(_lang.t('pumpExitPassTitle'),
+              style: const TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.w900,
                   fontSize: 13)),
         ]),
         content: Text(
-          'La pompe sera arrêtée et la passe N°${widget.passNum} sera interrompue.',
+          '${_lang.t('pumpExitPassMsgPrefix')}${widget.passNum}'
+          '${_lang.t('pumpExitPassMsgSuffix')}',
           style: TextStyle(color: Colors.grey[400], fontSize: 12, height: 1.5),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('Continuer',
-                  style: TextStyle(color: Colors.grey))),
+              child: Text(_lang.t('pumpContinueBtn'),
+                  style: const TextStyle(color: Colors.grey))),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             style: ElevatedButton.styleFrom(
@@ -330,8 +333,8 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10))),
-            child: const Text('QUITTER',
-                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11)),
+            child: Text(_lang.t('pumpQuitBtn'),
+                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11)),
           ),
         ],
       ),
@@ -358,8 +361,8 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
             onPressed: _confirmExit),
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            const Text('PASSE ',
-                style: TextStyle(
+            Text('${_lang.t('pumpPassLabel')} ',
+                style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w900,
                     fontSize: 14)),
@@ -387,7 +390,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.bug_report, color: Colors.white70, size: 20),
-            tooltip: 'Debug Arduino/Pi',
+            tooltip: _lang.t('pumpDebugTooltip'),
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(
@@ -418,7 +421,9 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
                             : Colors.red,
                         shape: BoxShape.circle)),
                 const SizedBox(width: 4),
-                Text(_piConnected ? 'PI CONNECTÉ' : 'PI HORS LIGNE',
+                Text(_piConnected
+                        ? _lang.t('pumpPiConnected')
+                        : _lang.t('pumpPiOffline'),
                     style: TextStyle(
                         color: _piConnected
                             ? const Color(0xFF22D3EE)
@@ -475,7 +480,8 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
                   : Colors.white.withOpacity(0.06))),
       child: Column(children: [
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text('PASSE N°${widget.passNum} — AVANCEMENT',
+          Text('${_lang.t('pumpProgressTitlePrefix')}${widget.passNum}'
+                  '${_lang.t('pumpProgressTitleSuffix')}',
               style: TextStyle(
                   color: Colors.grey[500],
                   fontSize: 8,
@@ -501,13 +507,13 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
         ),
         const SizedBox(height: 10),
         Row(children: [
-          _miniStat('Résinés',
+          _miniStat(_lang.t('pumpStatResined'),
               '${_metersDone.toStringAsFixed(2)} m', const Color(0xFF22D3EE)),
-          _miniStat('Restants',
+          _miniStat(_lang.t('pumpStatMetersRemaining'),
               '${_metersLeft.toStringAsFixed(2)} m', Colors.white),
-          _miniStat('Écoulé', _fmt(_timeElapsed), Colors.white),
-          _miniStat('Restant', _fmt(remainingMins), Colors.white),
-          _miniStat('Résine',
+          _miniStat(_lang.t('pumpStatElapsed'), _fmt(_timeElapsed), Colors.white),
+          _miniStat(_lang.t('pumpStatTimeRemaining'), _fmt(remainingMins), Colors.white),
+          _miniStat(_lang.t('pumpStatResin'),
               '${_resinConso.toStringAsFixed(2)} L', Colors.purpleAccent),
         ]),
       ]),
@@ -548,7 +554,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
         Row(children: [
           const Icon(Icons.tune, color: Color(0xFF22D3EE), size: 13),
           const SizedBox(width: 6),
-          Text('CONTRÔLES',
+          Text(_lang.t('pumpControlsTitle'),
               style: TextStyle(
                   color: Colors.grey[400],
                   fontSize: 8,
@@ -594,7 +600,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
               const SizedBox(width: 8),
               Flexible(
                 child: Text(
-                  _isPumpOn ? 'ARRÊTER MOTEUR' : 'DÉMARRER MOTEUR',
+                  _isPumpOn ? _lang.t('pumpStopMotorBtn') : _lang.t('pumpStartMotorBtn'),
                   style: TextStyle(
                       color: _isPumpOn ? Colors.redAccent : Colors.greenAccent,
                       fontSize: 12,
@@ -623,7 +629,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
         Row(children: [
           const Icon(Icons.speed, color: Color(0xFF22D3EE), size: 13),
           const SizedBox(width: 6),
-          Text('COMMANDES DE VITESSE',
+          Text(_lang.t('pumpSpeedControlsTitle'),
               style: TextStyle(
                   color: Colors.grey[400],
                   fontSize: 8,
@@ -645,7 +651,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
             Row(mainAxisAlignment: MainAxisAlignment.center, children: [
               const Icon(Icons.water_drop, color: Color(0xFF22D3EE), size: 13),
               const SizedBox(width: 4),
-              Text('Débit',
+              Text(_lang.t('pumpFlowLabel'),
                   style: TextStyle(color: Colors.grey[400], fontSize: 12)),
             ]),
             const SizedBox(height: 3),
@@ -714,7 +720,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
             Row(mainAxisAlignment: MainAxisAlignment.center, children: [
               const Icon(Icons.speed, color: Color(0xFFEAB308), size: 13),
               const SizedBox(width: 4),
-              Text('Vitesse',
+              Text(_lang.t('pumpSpeedLabel'),
                   style: TextStyle(color: Colors.grey[400], fontSize: 12)),
             ]),
             const SizedBox(height: 3),
@@ -791,7 +797,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
             border: Border.all(
                 color: const Color(0xFFEAB308).withOpacity(0.25))),
         child: Column(children: [
-          Text('DÉBIT MESURÉ',
+          Text(_lang.t('pumpMeasuredFlowTitle'),
               style: TextStyle(
                   color: Colors.grey[500],
                   fontSize: 8,
@@ -819,7 +825,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
       Row(children: [
         Expanded(
             child: TankLevelGauge(
-                label: 'RÉSINE',
+                label: _lang.t('pumpTankResinLabel'),
                 fillRatio: fillRatio,
                 color: Colors.purpleAccent,
                 isSensorOk: _niveauResineOk,
@@ -827,7 +833,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
         const SizedBox(width: 10),
         Expanded(
             child: TankLevelGauge(
-                label: 'DURCIS.',
+                label: _lang.t('pumpTankHardenerLabel'),
                 fillRatio: fillRatio,
                 color: const Color(0xFF22D3EE),
                 isSensorOk: _niveauDurcisseurOk,
@@ -838,50 +844,156 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
 
   // ── Supervision hardware ───────────────────────
   Widget _buildHardwareSupervision() {
+    return Column(children: [
+      Row(children: [
+        const Icon(Icons.memory, color: Color(0xFF22D3EE), size: 13),
+        const SizedBox(width: 6),
+        Text(_lang.t('pumpHardwareSupervisionTitle'),
+            style: TextStyle(
+                color: Colors.cyan[100],
+                fontSize: 9,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.5)),
+      ]),
+      const SizedBox(height: 8),
+
+      // Cartes moteurs — une par pompe
+      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(
+          child: _buildPumpCard(
+            pumpLabel: _lang.t('pumpMotorALabel'),
+            percent: _consoMoteurA,
+            sondeOk: _niveauResineOk,
+            sondeLabel: _lang.t('pumpSensorResinLabel'),
+            tempLabel: _lang.t('pumpCoverage1Label'),
+            tempValue: _tempCouverture1,
+            temp2Label: _lang.t('pumpFeederResinLabel'),
+            temp2Value: _tempNourriceResine,
+            accentColor: const Color(0xFFA855F7),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _buildPumpCard(
+            pumpLabel: _lang.t('pumpMotorBLabel'),
+            percent: _consoMoteurB,
+            sondeOk: _niveauDurcisseurOk,
+            sondeLabel: _lang.t('pumpSensorHardenerLabel'),
+            tempLabel: _lang.t('pumpCoverage2Label'),
+            tempValue: _tempCouverture2,
+            temp2Label: _lang.t('pumpFeederHardenerLabel'),
+            temp2Value: _tempNourriceDurcisseur,
+            accentColor: const Color(0xFF22D3EE),
+          ),
+        ),
+      ]),
+    ]);
+  }
+
+  Widget _buildPumpCard({
+    required String pumpLabel,
+    required double percent,
+    required bool sondeOk,
+    required String sondeLabel,
+    required String tempLabel,
+    required double tempValue,
+    required String temp2Label,
+    required double temp2Value,
+    required Color accentColor,
+  }) {
+    final Color barColor = percent > 80.0
+        ? Colors.redAccent
+        : percent > 60.0
+            ? Colors.orangeAccent
+            : Colors.greenAccent;
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
           color: const Color(0xFF101015),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-              color: const Color(0xFF22D3EE).withOpacity(0.3))),
+          border: Border.all(color: accentColor.withOpacity(0.35))),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // En-tête pompe
         Row(children: [
-          const Icon(Icons.memory, color: Color(0xFF22D3EE), size: 13),
+          Icon(Icons.settings, color: accentColor, size: 13),
           const SizedBox(width: 6),
-          Text('SUPERVISION HARDWARE',
+          Text(pumpLabel,
               style: TextStyle(
-                  color: Colors.cyan[100],
-                  fontSize: 9,
+                  color: accentColor,
+                  fontSize: 11,
                   fontWeight: FontWeight.w900,
-                  letterSpacing: 1.5)),
+                  letterSpacing: 1.2)),
         ]),
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
+
+        // % charge moteur
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text(_lang.t('pumpLoadLabel'),
+              style: TextStyle(
+                  color: Colors.grey[500],
+                  fontSize: 8,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5)),
+          Text('${percent.toInt()}%',
+              style: TextStyle(
+                  color: barColor, fontSize: 12, fontWeight: FontWeight.w900)),
+        ]),
+        const SizedBox(height: 4),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(3),
+          child: LinearProgressIndicator(
+            value: (percent / 100).clamp(0.0, 1.0),
+            backgroundColor: Colors.white.withOpacity(0.05),
+            color: barColor,
+            minHeight: 5,
+          ),
+        ),
+        const SizedBox(height: 10),
+
+        // RPM retiré : plus de mesure RPM par l'Arduino, le débit remplace
+        // désormais cette information dans le gros indicateur "DÉBIT MESURÉ".
+
+        const SizedBox(height: 10),
         const Divider(color: Colors.white12, height: 1),
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
 
-        // Jauges moteurs
-        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Expanded(child: _buildMotorGauge('POMPE A', _consoMoteurA)),
-          const SizedBox(width: 14),
-          Expanded(child: _buildMotorGauge('POMPE B', _consoMoteurB)),
+        // État sonde niveau
+        Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          Expanded(
+            child: Text(sondeLabel,
+                style: TextStyle(
+                    color: Colors.grey[500],
+                    fontSize: 8,
+                    fontWeight: FontWeight.w700,
+                    height: 1.3)),
+          ),
+          const SizedBox(width: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+                color: (sondeOk ? Colors.green : Colors.amber).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                    color: (sondeOk ? Colors.green : Colors.amber)
+                        .withOpacity(0.45))),
+            child: Text(sondeOk ? _lang.t('pumpStatusOk') : _lang.t('pumpStatusNok'),
+                style: TextStyle(
+                    color: sondeOk ? Colors.greenAccent : Colors.amberAccent,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900)),
+          ),
         ]),
 
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
         const Divider(color: Colors.white12, height: 1),
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
 
-        // Températures — 2 colonnes x 2 lignes
+        // Températures — couverture + nourrice
         Row(children: [
-          Expanded(child: _buildTempBadge('Nourrice Résine',  _tempNourriceResine,     iconColor: const Color(0xFFA855F7))),
+          Expanded(child: _buildTempBadge(tempLabel, tempValue, iconColor: accentColor)),
           const SizedBox(width: 6),
-          Expanded(child: _buildTempBadge('Nourrice Durcis.', _tempNourriceDurcisseur, iconColor: const Color(0xFF22D3EE))),
-        ]),
-        const SizedBox(height: 6),
-        Row(children: [
-          Expanded(child: _buildTempBadge('Couverture 1', _tempCouverture1, iconColor: const Color(0xFFA855F7))),
-          const SizedBox(width: 6),
-          Expanded(child: _buildTempBadge('Couverture 2', _tempCouverture2, iconColor: const Color(0xFF22D3EE))),
+          Expanded(child: _buildTempBadge(temp2Label, temp2Value, iconColor: accentColor)),
         ]),
       ]),
     );
@@ -898,48 +1010,6 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
         child: Text(text,
             style: TextStyle(
                 color: color, fontSize: 8, fontWeight: FontWeight.w900)));
-  }
-
-  Widget _buildMotorGauge(String label, double percent) {
-    final Color barColor = percent > 80.0
-        ? Colors.redAccent
-        : percent > 60.0
-            ? Colors.orangeAccent
-            : Colors.greenAccent;
-    return Row(children: [
-      Expanded(
-        flex: 5,
-        child: Text(label,
-            style: TextStyle(
-                color: Colors.grey[500],
-                fontSize: 8,
-                fontWeight: FontWeight.w700),
-            overflow: TextOverflow.ellipsis),
-      ),
-      const SizedBox(width: 8),
-      Expanded(
-        flex: 9,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(3),
-          child: LinearProgressIndicator(
-            value: percent / 100,
-            backgroundColor: Colors.white.withOpacity(0.05),
-            color: barColor,
-            minHeight: 5,
-          ),
-        ),
-      ),
-      const SizedBox(width: 6),
-      SizedBox(
-        width: 30,
-        child: Text('${percent.toInt()}%',
-            style: TextStyle(
-                color: barColor,
-                fontSize: 9,
-                fontWeight: FontWeight.w900),
-            textAlign: TextAlign.right),
-      ),
-    ]);
   }
 
   Widget _buildTempBadge(String label, double temp, {Color iconColor = const Color(0xFFA855F7)}) {
@@ -1177,7 +1247,7 @@ class TankLevelGauge extends StatelessWidget {
                 : Colors.red.withOpacity(0.2),
             borderRadius: BorderRadius.circular(4)),
         child: Text(
-          isSensorOk ? 'OK' : 'VIDE',
+          isSensorOk ? LangService().t('pumpStatusOk') : LangService().t('pumpTankEmpty'),
           style: TextStyle(
               color: isSensorOk ? Colors.greenAccent : Colors.redAccent,
               fontSize: 9,

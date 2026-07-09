@@ -20,8 +20,13 @@ class _PumpDebugScreenState extends State<PumpDebugScreen> {
 
   bool _piReachable = false;
   String _rawJson = '—';
-  double _rpm = 0.0;
   double _consoMoteurAPercent = 0.0;
+  double _consoMoteurBPercent = 0.0;
+  double _debitA = 0.0;
+  double _debitB = 0.0;
+  double _debit = 0.0;
+  int _capteurRaw = 0;
+  String _activePump = '—';
   bool _arduinoConnected = false;
   DateTime? _lastFetch;
   String? _lastError;
@@ -54,10 +59,17 @@ class _PumpDebugScreenState extends State<PumpDebugScreen> {
           _lastError = null;
           _lastFetch = DateTime.now();
           _rawJson = const JsonEncoder.withIndent('  ').convert(data);
-          _rpm = (data['rpm'] as num?)?.toDouble() ?? 0.0;
           _consoMoteurAPercent =
               ((data['consoMoteurA_percent'] as num?)?.toDouble() ?? 0.0)
                   .clamp(0.0, 100.0);
+          _consoMoteurBPercent =
+              ((data['consoMoteurB_percent'] as num?)?.toDouble() ?? 0.0)
+                  .clamp(0.0, 100.0);
+          _debitA = (data['debitA'] as num?)?.toDouble() ?? 0.0;
+          _debitB = (data['debitB'] as num?)?.toDouble() ?? 0.0;
+          _debit = (data['debit'] as num?)?.toDouble() ?? 0.0;
+          _capteurRaw = (data['capteur_raw'] as num?)?.toInt() ?? 0;
+          _activePump = (data['active_pump'] as String?) ?? '—';
           _arduinoConnected = data['connected'] == true;
         });
       } else {
@@ -97,10 +109,65 @@ class _PumpDebugScreenState extends State<PumpDebugScreen> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           _statusBadge(),
           const SizedBox(height: 16),
-          _valueTile('RPM', _rpm.toStringAsFixed(2), const Color(0xFF22D3EE)),
+
+          // ── Zone de calibration CAPTEUR ──
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+                color: Colors.amber.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.amber.withOpacity(0.3))),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('CALIBRATION CAPTEUR À FOURCHE',
+                  style: TextStyle(
+                      color: Colors.amber[200],
+                      fontSize: 9,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 1)),
+              const SizedBox(height: 6),
+              Text(
+                'Observe physiquement quel côté pousse pendant que tu notes '
+                'la valeur ci-dessous, puis ajuste CAPTEUR_1_IS_PUMP_A dans '
+                'pi_pump_server.py si besoin.',
+                style: TextStyle(color: Colors.grey[400], fontSize: 11, height: 1.4),
+              ),
+              const SizedBox(height: 10),
+              Row(children: [
+                Expanded(
+                    child: _valueTile('CAPTEUR (brut)', '$_capteurRaw',
+                        Colors.amber)),
+                const SizedBox(width: 8),
+                Expanded(
+                    child: _valueTile('Pompe active', _activePump,
+                        Colors.amber)),
+              ]),
+            ]),
+          ),
+          const SizedBox(height: 16),
+
+          _valueTile('Débit courant (poussé)', '${_debit.toStringAsFixed(3)} L/min',
+              const Color(0xFF22D3EE)),
           const SizedBox(height: 8),
-          _valueTile('Conso moteur A (%)',
-              '${_consoMoteurAPercent.toStringAsFixed(1)} %', Colors.purpleAccent),
+          Row(children: [
+            Expanded(
+                child: _valueTile('Débit A', '${_debitA.toStringAsFixed(3)} L/min',
+                    Colors.purpleAccent)),
+            const SizedBox(width: 8),
+            Expanded(
+                child: _valueTile('Débit B', '${_debitB.toStringAsFixed(3)} L/min',
+                    const Color(0xFF22D3EE))),
+          ]),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(
+                child: _valueTile('Charge A',
+                    '${_consoMoteurAPercent.toStringAsFixed(1)} %', Colors.purpleAccent)),
+            const SizedBox(width: 8),
+            Expanded(
+                child: _valueTile('Charge B',
+                    '${_consoMoteurBPercent.toStringAsFixed(1)} %', const Color(0xFF22D3EE))),
+          ]),
           const SizedBox(height: 8),
           _valueTile('Arduino → Pi frais', _arduinoConnected ? 'OUI' : 'NON',
               _arduinoConnected ? Colors.greenAccent : Colors.redAccent),
