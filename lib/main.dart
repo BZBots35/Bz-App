@@ -100,8 +100,8 @@ class _SplashScreenState extends State<SplashScreen> {
   Future<void> _checkAuth() async {
     await Future.delayed(const Duration(milliseconds: 800));
 
-    final connectivity = await Connectivity().checkConnectivity();
-    final isOnline = connectivity != ConnectivityResult.none;
+    final connectivityResults = await Connectivity().checkConnectivity();
+    final isOnline = connectivityResults.any((r) => r != ConnectivityResult.none);
 
     final auth = AuthService();
 

@@ -93,11 +93,13 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
           _piConnected = true;
           // État séparé : est-ce que l'Arduino transmet des données fraîches ?
           _arduinoConnected = data['connected'] == true;
-          _consoMoteurA = (data['consoMoteurA_percent'] as num?)?.toDouble()
+          // Le capteur physique route la donnée réelle sur consoMoteurB_percent
+          // pour l'instant : on l'affiche directement sur la carte "Pompe A".
+          _consoMoteurA = (data['consoMoteurB_percent'] as num?)?.toDouble()
               ?? _consoMoteurA;
-          _consoMoteurB = (data['consoMoteurB_percent'] as num?)?.toDouble()
-              ?? _consoMoteurB;
           _debitReel = (data['debit'] as num?)?.toDouble() ?? _debitReel;
+          _tempCouverture1 = (data['temperature'] as num?)?.toDouble()
+              ?? _tempCouverture1;
         });
       } else {
         _registerFailure();
@@ -134,7 +136,6 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
 
   // ── Télémétrie : A/B réels via Arduino, reste simulé ──
   double _consoMoteurA            = 0.0;
-  double _consoMoteurB            = 0.0;
   bool   _niveauResineOk          = true;
   bool   _niveauDurcisseurOk      = true;
   double _tempNourriceResine      = 20.0;
@@ -821,24 +822,75 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
       ),
       const SizedBox(height: 10),
 
-      // Cuves résine / durcisseur
-      Row(children: [
+      // Cuves résine / durcisseur — avec leur température de couverture juste à côté
+      Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
         Expanded(
-            child: TankLevelGauge(
-                label: _lang.t('pumpTankResinLabel'),
-                fillRatio: fillRatio,
-                color: Colors.purpleAccent,
-                isSensorOk: _niveauResineOk,
-                capacityLiters: 6.5)),
-        const SizedBox(width: 10),
+          flex: 3,
+          child: TankLevelGauge(
+              label: _lang.t('pumpTankResinLabel'),
+              fillRatio: fillRatio,
+              color: Colors.purpleAccent,
+              isSensorOk: _niveauResineOk,
+              capacityLiters: 6.5),
+        ),
+        const SizedBox(width: 6),
+        _buildCompactTempChip(
+            _lang.t('pumpCoverage1Label'),
+            _tempCouverture1,
+            Colors.purpleAccent),
+        const SizedBox(width: 14),
         Expanded(
-            child: TankLevelGauge(
-                label: _lang.t('pumpTankHardenerLabel'),
-                fillRatio: fillRatio,
-                color: const Color(0xFF22D3EE),
-                isSensorOk: _niveauDurcisseurOk,
-                capacityLiters: 3.25)),
+          flex: 3,
+          child: TankLevelGauge(
+              label: _lang.t('pumpTankHardenerLabel'),
+              fillRatio: fillRatio,
+              color: const Color(0xFF22D3EE),
+              isSensorOk: _niveauDurcisseurOk,
+              capacityLiters: 3.25),
+        ),
+        const SizedBox(width: 6),
+        _buildCompactTempChip(
+            _lang.t('pumpCoverage2Label'),
+            _tempCouverture2,
+            const Color(0xFF22D3EE)),
       ]),
+      const SizedBox(height: 10),
+
+      // Pompe A — même style visuel que les cuves. La température de la
+      // nourrice résine s'affiche en petit juste au-dessus de la jauge.
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.02),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withOpacity(0.08))),
+        child: Column(children: [
+          Text(_lang.t('pumpMotorALabel'),
+              style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 2)),
+          const SizedBox(height: 8),
+          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(Icons.thermostat, color: Colors.purpleAccent.withOpacity(0.7), size: 11),
+            const SizedBox(width: 3),
+            Text(_lang.t('pumpFeederResinLabel'),
+                style: TextStyle(
+                    color: Colors.grey[500], fontSize: 8, fontWeight: FontWeight.w700)),
+            const SizedBox(width: 4),
+            Text('${_tempNourriceResine.toStringAsFixed(1)}°C',
+                style: const TextStyle(
+                    color: Colors.white70, fontSize: 8, fontWeight: FontWeight.w900)),
+          ]),
+          const SizedBox(height: 10),
+          PumpLoadGauge(
+              label: '',
+              percent: _consoMoteurA,
+              color: Colors.purpleAccent),
+        ]),
+      ),
     ]);
   }
 
@@ -856,27 +908,6 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
                 letterSpacing: 1.5)),
       ]),
       const SizedBox(height: 8),
-
-      // Charge moteurs — purement mécanique, indépendant de quelle
-      // substance (résine ou durcisseur) transite par chaque pompe.
-      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Expanded(
-          child: _buildMotorLoadCard(
-            pumpLabel: _lang.t('pumpMotorALabel'),
-            percent: _consoMoteurA,
-            accentColor: const Color(0xFFA855F7),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _buildMotorLoadCard(
-            pumpLabel: _lang.t('pumpMotorBLabel'),
-            percent: _consoMoteurB,
-            accentColor: const Color(0xFF22D3EE),
-          ),
-        ),
-      ]),
-      const SizedBox(height: 10),
 
       // Réservoirs — sonde niveau + températures, liés à la substance
       // (résine/durcisseur), pas à la pompe qui la véhicule à l'instant T.
@@ -910,57 +941,26 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
     ]);
   }
 
-  // Carte compacte : uniquement la charge moteur d'une pompe (A ou B)
-  Widget _buildMotorLoadCard({
-    required String pumpLabel,
-    required double percent,
-    required Color accentColor,
-  }) {
-    final Color barColor = percent > 80.0
-        ? Colors.redAccent
-        : percent > 60.0
-            ? Colors.orangeAccent
-            : Colors.greenAccent;
-
+  // Puce compacte température — à coller juste à côté d'une cuve (pas dessous)
+  Widget _buildCompactTempChip(String label, double temp, Color color) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      width: 46,
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
       decoration: BoxDecoration(
-          color: const Color(0xFF101015),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: accentColor.withOpacity(0.35))),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Icon(Icons.settings, color: accentColor, size: 13),
-          const SizedBox(width: 6),
-          Text(pumpLabel,
-              style: TextStyle(
-                  color: accentColor,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 1.2)),
-        ]),
-        const SizedBox(height: 10),
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text(_lang.t('pumpLoadLabel'),
-              style: TextStyle(
-                  color: Colors.grey[500],
-                  fontSize: 8,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.5)),
-          Text('${percent.toInt()}%',
-              style: TextStyle(
-                  color: barColor, fontSize: 12, fontWeight: FontWeight.w900)),
-        ]),
+          color: Colors.black45,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.withOpacity(0.3))),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.thermostat, color: color, size: 14),
         const SizedBox(height: 4),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(3),
-          child: LinearProgressIndicator(
-            value: (percent / 100).clamp(0.0, 1.0),
-            backgroundColor: Colors.white.withOpacity(0.05),
-            color: barColor,
-            minHeight: 5,
-          ),
-        ),
+        Text('${temp.toStringAsFixed(0)}°',
+            style: const TextStyle(
+                color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
+        const SizedBox(height: 3),
+        Text(label,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            style: TextStyle(color: Colors.grey[500], fontSize: 6.5, height: 1.1)),
       ]),
     );
   }
@@ -1292,6 +1292,89 @@ class TankLevelGauge extends StatelessWidget {
               fontWeight: FontWeight.w900),
         ),
       ),
+    ]);
+  }
+}
+
+/// Jauge pompe — même style visuel que TankLevelGauge (cuves), pour que
+/// le schéma "réservoirs + pompe" soit cohérent d'un seul coup d'œil.
+class PumpLoadGauge extends StatelessWidget {
+  final String label;
+  final double percent; // 0–100
+  final Color color;
+
+  const PumpLoadGauge({
+    super.key,
+    required this.label,
+    required this.percent,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final ratio = (percent / 100).clamp(0.0, 1.0);
+
+    return Column(children: [
+      if (label.isNotEmpty) ...[
+        Text(label,
+            style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 10,
+                fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+      ],
+      LayoutBuilder(builder: (context, constraints) {
+        final w = (constraints.maxWidth * 0.7).clamp(40.0, 70.0);
+        return Container(
+          height: 120,
+          width: w,
+          decoration: BoxDecoration(
+              color: const Color(0xFF0A0A0F),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white24, width: 2),
+              boxShadow: [
+                BoxShadow(
+                    color: color.withOpacity(0.15),
+                    blurRadius: 10,
+                    spreadRadius: 1)
+              ]),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Stack(alignment: Alignment.bottomCenter, children: [
+              FractionallySizedBox(
+                heightFactor: ratio,
+                widthFactor: 1.0,
+                child: Container(
+                  decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [color.withOpacity(0.6), color])),
+                  child: Align(
+                      alignment: Alignment.topCenter,
+                      child: Container(height: 2, color: Colors.white54)),
+                ),
+              ),
+              Positioned(
+                left: 4, top: 4, bottom: 4,
+                width: 12,
+                child: Container(
+                    decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(10))),
+              ),
+              Center(
+                child: Text('${percent.toStringAsFixed(0)}%',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                        shadows: [Shadow(color: Colors.black, blurRadius: 4)])),
+              ),
+            ]),
+          ),
+        );
+      }),
     ]);
   }
 }
