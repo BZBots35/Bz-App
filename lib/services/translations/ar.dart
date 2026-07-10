@@ -1386,4 +1386,6 @@ const Map<String, String> ar = {
 'pumpFeederHardenerLabel': "خزان المصلب",
 'pumpLoadLabel': "الحمل",
 'pumpStatusNok': "غير سليم",
+'pumpReservoirResinLabel': "خزان الراتنج",
+'pumpReservoirHardenerLabel': "خزان المصلب",
 };

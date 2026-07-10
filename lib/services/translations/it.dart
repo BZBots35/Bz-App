@@ -1398,4 +1398,6 @@ const Map<String, String> it = {
 'pumpFeederHardenerLabel': "Alimentatore Indur.",
 'pumpLoadLabel': "CARICO",
 'pumpStatusNok': "NOK",
+'pumpReservoirResinLabel': "SERBATOIO RESINA",
+'pumpReservoirHardenerLabel': "SERBATOIO INDURENTE",
 };

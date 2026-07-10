@@ -857,12 +857,33 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
       ]),
       const SizedBox(height: 8),
 
-      // Cartes moteurs — une par pompe
+      // Charge moteurs — purement mécanique, indépendant de quelle
+      // substance (résine ou durcisseur) transite par chaque pompe.
       Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Expanded(
-          child: _buildPumpCard(
+          child: _buildMotorLoadCard(
             pumpLabel: _lang.t('pumpMotorALabel'),
             percent: _consoMoteurA,
+            accentColor: const Color(0xFFA855F7),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _buildMotorLoadCard(
+            pumpLabel: _lang.t('pumpMotorBLabel'),
+            percent: _consoMoteurB,
+            accentColor: const Color(0xFF22D3EE),
+          ),
+        ),
+      ]),
+      const SizedBox(height: 10),
+
+      // Réservoirs — sonde niveau + températures, liés à la substance
+      // (résine/durcisseur), pas à la pompe qui la véhicule à l'instant T.
+      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(
+          child: _buildReservoirCard(
+            reservoirLabel: _lang.t('pumpReservoirResinLabel'),
             sondeOk: _niveauResineOk,
             sondeLabel: _lang.t('pumpSensorResinLabel'),
             tempLabel: _lang.t('pumpCoverage1Label'),
@@ -874,9 +895,8 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
         ),
         const SizedBox(width: 10),
         Expanded(
-          child: _buildPumpCard(
-            pumpLabel: _lang.t('pumpMotorBLabel'),
-            percent: _consoMoteurB,
+          child: _buildReservoirCard(
+            reservoirLabel: _lang.t('pumpReservoirHardenerLabel'),
             sondeOk: _niveauDurcisseurOk,
             sondeLabel: _lang.t('pumpSensorHardenerLabel'),
             tempLabel: _lang.t('pumpCoverage2Label'),
@@ -890,15 +910,10 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
     ]);
   }
 
-  Widget _buildPumpCard({
+  // Carte compacte : uniquement la charge moteur d'une pompe (A ou B)
+  Widget _buildMotorLoadCard({
     required String pumpLabel,
     required double percent,
-    required bool sondeOk,
-    required String sondeLabel,
-    required String tempLabel,
-    required double tempValue,
-    required String temp2Label,
-    required double temp2Value,
     required Color accentColor,
   }) {
     final Color barColor = percent > 80.0
@@ -914,7 +929,6 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: accentColor.withOpacity(0.35))),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // En-tête pompe
         Row(children: [
           Icon(Icons.settings, color: accentColor, size: 13),
           const SizedBox(width: 6),
@@ -926,8 +940,6 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
                   letterSpacing: 1.2)),
         ]),
         const SizedBox(height: 10),
-
-        // % charge moteur
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
           Text(_lang.t('pumpLoadLabel'),
               style: TextStyle(
@@ -949,13 +961,39 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
             minHeight: 5,
           ),
         ),
-        const SizedBox(height: 10),
+      ]),
+    );
+  }
 
-        // RPM retiré : plus de mesure RPM par l'Arduino, le débit remplace
-        // désormais cette information dans le gros indicateur "DÉBIT MESURÉ".
-
-        const SizedBox(height: 10),
-        const Divider(color: Colors.white12, height: 1),
+  // Carte compacte : sonde niveau + températures d'un réservoir (résine ou durcisseur)
+  Widget _buildReservoirCard({
+    required String reservoirLabel,
+    required bool sondeOk,
+    required String sondeLabel,
+    required String tempLabel,
+    required double tempValue,
+    required String temp2Label,
+    required double temp2Value,
+    required Color accentColor,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+          color: const Color(0xFF101015),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: accentColor.withOpacity(0.35))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // En-tête réservoir
+        Row(children: [
+          Icon(Icons.propane_tank_outlined, color: accentColor, size: 13),
+          const SizedBox(width: 6),
+          Text(reservoirLabel,
+              style: TextStyle(
+                  color: accentColor,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1.2)),
+        ]),
         const SizedBox(height: 10),
 
         // État sonde niveau

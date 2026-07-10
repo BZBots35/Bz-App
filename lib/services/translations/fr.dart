@@ -1395,4 +1395,6 @@ const Map<String, String> fr = {
 'pumpFeederHardenerLabel': "Nourrice Durcis.",
 'pumpLoadLabel': "CHARGE",
 'pumpStatusNok': "NOK",
+'pumpReservoirResinLabel': "RÉSERVOIR RÉSINE",
+'pumpReservoirHardenerLabel': "RÉSERVOIR DURCISSEUR",
 };

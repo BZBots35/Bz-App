@@ -1386,4 +1386,6 @@ const Map<String, String> da = {
 'pumpFeederHardenerLabel': "Hærderbeholder",
 'pumpLoadLabel': "BELASTNING",
 'pumpStatusNok': "NOK",
+'pumpReservoirResinLabel': "RESINBEHOLDER",
+'pumpReservoirHardenerLabel': "HÆRDERBEHOLDER",
 };

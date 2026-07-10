@@ -1398,4 +1398,6 @@ const Map<String, String> ru = {
 'pumpFeederHardenerLabel': "Бак отверд.",
 'pumpLoadLabel': "НАГРУЗКА",
 'pumpStatusNok': "NOK",
+'pumpReservoirResinLabel': "РЕЗЕРВУАР СМОЛЫ",
+'pumpReservoirHardenerLabel': "РЕЗЕРВУАР ОТВЕРДИТЕЛЯ",
 };

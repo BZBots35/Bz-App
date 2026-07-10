@@ -1398,4 +1398,6 @@ const Map<String, String> hi = {
 'pumpFeederHardenerLabel': "हार्डनर फीडर",
 'pumpLoadLabel': "लोड",
 'pumpStatusNok': "खराब",
+'pumpReservoirResinLabel': "रेजिन टैंक",
+'pumpReservoirHardenerLabel': "हार्डनर टैंक",
 };

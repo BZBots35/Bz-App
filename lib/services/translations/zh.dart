@@ -1399,4 +1399,6 @@ const Map<String, String> zh = {
 'pumpFeederHardenerLabel': "固化剂储料罐",
 'pumpLoadLabel': "负载",
 'pumpStatusNok': "异常",
+'pumpReservoirResinLabel': "树脂储罐",
+'pumpReservoirHardenerLabel': "固化剂储罐",
 };

@@ -1393,4 +1393,6 @@ const Map<String, String> ko = {
 'pumpFeederHardenerLabel': "경화제 공급기",
 'pumpLoadLabel': "부하",
 'pumpStatusNok': "비정상",
+'pumpReservoirResinLabel': "수지 탱크",
+'pumpReservoirHardenerLabel': "경화제 탱크",
 };

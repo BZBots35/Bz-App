@@ -1378,4 +1378,6 @@ const Map<String, String> ja = {
 'pumpFeederHardenerLabel': "硬化剤供給",
 'pumpLoadLabel': "負荷",
 'pumpStatusNok': "異常",
+'pumpReservoirResinLabel': "樹脂タンク",
+'pumpReservoirHardenerLabel': "硬化剤タンク",
 };
