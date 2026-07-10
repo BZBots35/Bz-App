@@ -27,6 +27,7 @@ class _PumpDebugScreenState extends State<PumpDebugScreen> {
   double _debit = 0.0;
   int _capteurRaw = 0;
   String _activePump = '—';
+  double? _temperature;
   bool _arduinoConnected = false;
   DateTime? _lastFetch;
   String? _lastError;
@@ -70,6 +71,7 @@ class _PumpDebugScreenState extends State<PumpDebugScreen> {
           _debit = (data['debit'] as num?)?.toDouble() ?? 0.0;
           _capteurRaw = (data['capteur_raw'] as num?)?.toInt() ?? 0;
           _activePump = (data['active_pump'] as String?) ?? '—';
+          _temperature = (data['temperature'] as num?)?.toDouble();
           _arduinoConnected = data['connected'] == true;
         });
       } else {
@@ -148,6 +150,13 @@ class _PumpDebugScreenState extends State<PumpDebugScreen> {
 
           _valueTile('Débit courant (poussé)', '${_debit.toStringAsFixed(3)} L/min',
               const Color(0xFF22D3EE)),
+          const SizedBox(height: 8),
+          _valueTile(
+              'Température',
+              _temperature != null
+                  ? '${_temperature!.toStringAsFixed(1)} °C'
+                  : '—',
+              Colors.orangeAccent),
           const SizedBox(height: 8),
           Row(children: [
             Expanded(
