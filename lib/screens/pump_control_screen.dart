@@ -44,15 +44,28 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
   bool _piConnected = false;
 
   Future<void> _sendCmd(String cmd) async {
+    // 1. URL construite proprement
+    final url = Uri.parse('${widget.piBase}/command');
+    
     try {
-      final resp = await http.post(
-        Uri.parse('${widget.piBase}/cmd'),
-        headers: {'Content-Type': 'application/json'},
-        body: '{"cmd": "$cmd"}',
-      ).timeout(const Duration(seconds: 3));
-      if (resp.statusCode == 200) setState(() => _piConnected = true);
-    } catch (_) {
-      setState(() => _piConnected = false);
+      // 2. On envoie la commande avec le bon Header Content-Type
+      final response = await http.post(
+        url,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: json.encode({"cmd": cmd}),
+      );
+
+      // 3. Debug : Si ça ne marche pas, tu verras l'erreur dans la console
+      if (response.statusCode == 200) {
+        print("Commande envoyée avec succès : $cmd");
+      } else {
+        print("Erreur serveur ${response.statusCode} : ${response.body}");
+      }
+    } catch (e) {
+      // 4. Si le téléphone ne trouve pas le Pi, c'est ici que ça s'affiche
+      print("Erreur de connexion (Check l'IP piBase) : $e");
     }
   }
 
@@ -95,8 +108,9 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
           _arduinoConnected = data['connected'] == true;
           // Le capteur physique route la donnée réelle sur consoMoteurB_percent
           // pour l'instant : on l'affiche directement sur la carte "Pompe A".
-          _consoMoteurA = (data['consoMoteurB_percent'] as num?)?.toDouble()
-              ?? _consoMoteurA;
+          // Lecture propre et séparée des deux moteurs
+          _consoMoteurA = (data['consoMoteurA_percent'] as num?)?.toDouble() ?? _consoMoteurA;
+          _consoMoteurB = (data['consoMoteurB_percent'] as num?)?.toDouble() ?? _consoMoteurB;
           _debitReel = (data['debit'] as num?)?.toDouble() ?? _debitReel;
           _tempCouverture1 = (data['temperature'] as num?)?.toDouble()
               ?? _tempCouverture1;
@@ -136,6 +150,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
 
   // ── Télémétrie : A/B réels via Arduino, reste simulé ──
   double _consoMoteurA            = 0.0;
+  double _consoMoteurB            = 0.0;
   bool   _niveauResineOk          = true;
   bool   _niveauDurcisseurOk      = true;
   double _tempNourriceResine      = 20.0;
@@ -195,7 +210,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
     final clamped = parsed.clamp(0.0, 0.8);
     setState(() => _debitCommand = clamped);
     _debitFieldCtrl.text = clamped.toStringAsFixed(2);
-    if (_isPumpOn) _sendCmd('SPEED=${_debitToPwmPercent()}');
+    if (_isPumpOn) _sendCmd('SPEED12=${_debitToPwmPercent()}');
   }
 
   // Applique une valeur de vitesse saisie manuellement (clavier)
@@ -234,7 +249,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
           // Passe terminée automatiquement
           if (_metersLeft <= 0.001) {
             _isPumpOn = false;
-            _sendCmd('SPEED=0');
+            _sendCmd('SPEED12=0');
             _timer?.cancel();
             _showPasseTermineeDialog();
           }
@@ -243,11 +258,21 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
     });
   }
 
-  void _togglePump() {
-    setState(() => _isPumpOn = !_isPumpOn);
-    _sendCmd(_isPumpOn ? 'SPEED=${_debitToPwmPercent()}' : 'SPEED=0');
+ void _togglePump() {
+  setState(() => _isPumpOn = !_isPumpOn);
+  
+  if (_isPumpOn) {
+    // 1. On envoie l'ordre de démarrage (START)
+    _sendCmd('START');
+    // 2. On envoie la vitesse juste après (si le serveur gère le délai)
+    Future.delayed(const Duration(milliseconds: 100), () {
+       _sendCmd('SPEED12=${_debitToPwmPercent()}');
+    });
+  } else {
+    // 1. On envoie l'ordre d'arrêt (STOP)
+    _sendCmd('STOP');
   }
-
+}
   String _fmt(double mins) {
     final m = mins.floor();
     final s = ((mins - m) * 60).round();
@@ -341,7 +366,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
       ),
     );
     if (confirm == true && mounted) {
-      _sendCmd('SPEED=0');
+      _sendCmd('SPEED12=0');
       Navigator.pop(context, false); // retour sans valider la passe
     }
   }
@@ -706,7 +731,7 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
                   }
                 }),
                 onChangeEnd: (val) {
-                  if (_isPumpOn) _sendCmd('SPEED=${_debitToPwmPercent()}');
+                  if (_isPumpOn) _sendCmd('SPEED12=${_debitToPwmPercent()}');
                 },
               ),
             ),
@@ -783,13 +808,18 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
   }
 
   // ── Métriques résine ───────────────────────────
+  // ── Métriques résine ───────────────────────────
+  // ── Métriques résine & pompes ───────────────────────────
   Widget _buildMetrics() {
     final totalResin = widget.qteParPasse * widget.passes;
     final resinLeft  = (totalResin - _resinConso).clamp(0.0, totalResin);
     final fillRatio  = totalResin > 0 ? resinLeft / totalResin : 0.0;
 
     return Column(children: [
-      // Débit réel en évidence
+      
+      // ==========================================
+      // ÉTAPE 1 : LE DÉBIT FINAL
+      // ==========================================
       Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
@@ -820,76 +850,179 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
           ]),
         ]),
       ),
-      const SizedBox(height: 10),
+      const SizedBox(height: 14),
 
-      // Cuves résine / durcisseur — avec leur température de couverture juste à côté
-      Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        Expanded(
-          flex: 3,
-          child: TankLevelGauge(
-              label: _lang.t('pumpTankResinLabel'),
-              fillRatio: fillRatio,
-              color: Colors.purpleAccent,
-              isSensorOk: _niveauResineOk,
-              capacityLiters: 6.5),
-        ),
-        const SizedBox(width: 6),
-        _buildCompactTempChip(
-            _lang.t('pumpCoverage1Label'),
-            _tempCouverture1,
-            Colors.purpleAccent),
-        const SizedBox(width: 14),
-        Expanded(
-          flex: 3,
-          child: TankLevelGauge(
-              label: _lang.t('pumpTankHardenerLabel'),
-              fillRatio: fillRatio,
-              color: const Color(0xFF22D3EE),
-              isSensorOk: _niveauDurcisseurOk,
-              capacityLiters: 3.25),
-        ),
-        const SizedBox(width: 6),
-        _buildCompactTempChip(
-            _lang.t('pumpCoverage2Label'),
-            _tempCouverture2,
-            const Color(0xFF22D3EE)),
-      ]),
-      const SizedBox(height: 10),
+      // ==========================================
+      // ÉTAPE 2 : CUVES + TUYAUX CONNECTÉS
+      // ==========================================
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          
+          // ── MOITIÉ GAUCHE : RÉSINE ──
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 1. Puce Température à l'extrême gauche
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.topRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 8.0),
+                      child: _buildCompactTempChip(
+                          _lang.t('pumpCoverage1Label'),
+                          _tempCouverture1,
+                          Colors.purpleAccent),
+                    ),
+                  ),
+                ),
+                // 2. Colonne Cuve + Tuyau (parfaitement au centre)
+                Column(
+                  children: [
+                    TankLevelGauge(
+                        label: _lang.t('pumpTankResinLabel'),
+                        fillRatio: fillRatio,
+                        color: Colors.purpleAccent,
+                        isSensorOk: _niveauResineOk,
+                        capacityLiters: 6.5),
+                    // Le tuyau soudé sous la cuve
+                    Container(
+                      width: 8,
+                      height: 24,
+                      color: Colors.purpleAccent.withOpacity(0.4),
+                    ),
+                  ],
+                ),
+                // 3. Espace fantôme pour équilibrer le centrage
+                const Expanded(child: SizedBox()),
+              ],
+            ),
+          ),
+          
+          // ── MOITIÉ DROITE : DURCISSEUR ──
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 1. Espace fantôme pour équilibrer le centrage
+                const Expanded(child: SizedBox()),
+                // 2. Colonne Cuve + Tuyau (parfaitement au centre)
+                Column(
+                  children: [
+                    TankLevelGauge(
+                        label: _lang.t('pumpTankHardenerLabel'),
+                        fillRatio: fillRatio,
+                        color: const Color(0xFF22D3EE),
+                        isSensorOk: _niveauDurcisseurOk,
+                        capacityLiters: 3.25),
+                    // Le tuyau soudé sous la cuve
+                    Container(
+                      width: 8,
+                      height: 24,
+                      color: const Color(0xFF22D3EE).withOpacity(0.4),
+                    ),
+                  ],
+                ),
+                // 3. Puce Température à l'extrême droite
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.topLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 8.0),
+                      child: _buildCompactTempChip(
+                          _lang.t('pumpCoverage2Label'),
+                          _tempCouverture2,
+                          const Color(0xFF22D3EE)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
 
-      // Pompe A — même style visuel que les cuves. La température de la
-      // nourrice résine s'affiche en petit juste au-dessus de la jauge.
+      // ==========================================
+      // ÉTAPE 3 : LE CŒUR MÉCANIQUE (BLOC POMPE)
+      // ==========================================
+      // (Aucun espace ici, les tuyaux viennent percuter directement le conteneur)
       Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.02),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.white.withOpacity(0.08))),
-        child: Column(children: [
-          Text(_lang.t('pumpMotorALabel'),
-              style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 2)),
-          const SizedBox(height: 8),
-          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Icon(Icons.thermostat, color: Colors.purpleAccent.withOpacity(0.7), size: 11),
-            const SizedBox(width: 3),
-            Text(_lang.t('pumpFeederResinLabel'),
-                style: TextStyle(
-                    color: Colors.grey[500], fontSize: 8, fontWeight: FontWeight.w700)),
-            const SizedBox(width: 4),
-            Text('${_tempNourriceResine.toStringAsFixed(1)}°C',
-                style: const TextStyle(
-                    color: Colors.white70, fontSize: 8, fontWeight: FontWeight.w900)),
-          ]),
-          const SizedBox(height: 10),
-          PumpLoadGauge(
-              label: '',
-              percent: _consoMoteurA,
-              color: Colors.purpleAccent),
-        ]),
+          color: Colors.white.withOpacity(0.03),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white24), // Les tuyaux atterrissent sur cette bordure
+        ),
+        child: Column(
+          children: [
+            const Text(
+              'BLOC POMPAGE BICOMPOSANT',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 2,
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Divider(color: Colors.white12, height: 1),
+            const SizedBox(height: 16),
+
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // SECTION MOTEUR A
+                Expanded(
+                  child: Column(
+                    children: [
+                      Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        Icon(Icons.thermostat, color: Colors.purpleAccent.withOpacity(0.7), size: 14),
+                        const SizedBox(width: 4),
+                        Text('${_tempNourriceResine.toStringAsFixed(1)}°C',
+                            style: const TextStyle(
+                                color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
+                      ]),
+                      const SizedBox(height: 12),
+                      PumpLoadGauge(
+                          label: _lang.t('pumpMotorALabel'),
+                          percent: _consoMoteurA,
+                          color: Colors.purpleAccent),
+                    ],
+                  ),
+                ),
+                
+                // Ligne de séparation interne
+                Container(
+                  height: 100, 
+                  width: 1,
+                  color: Colors.white12,
+                  margin: const EdgeInsets.symmetric(horizontal: 16),
+                ),
+
+                // SECTION MOTEUR B
+                Expanded(
+                  child: Column(
+                    children: [
+                      Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        Icon(Icons.thermostat, color: const Color(0xFF22D3EE).withOpacity(0.7), size: 14),
+                        const SizedBox(width: 4),
+                        Text('${_tempNourriceDurcisseur.toStringAsFixed(1)}°C',
+                            style: const TextStyle(
+                                color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
+                      ]),
+                      const SizedBox(height: 12),
+                      PumpLoadGauge(
+                          label: 'MOTEUR POMPE B', 
+                          percent: _consoMoteurB,
+                          color: const Color(0xFF22D3EE)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     ]);
   }
@@ -1276,22 +1409,7 @@ class TankLevelGauge extends StatelessWidget {
           ),
         );
       }),
-      const SizedBox(height: 8),
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-        decoration: BoxDecoration(
-            color: isSensorOk
-                ? Colors.green.withOpacity(0.2)
-                : Colors.red.withOpacity(0.2),
-            borderRadius: BorderRadius.circular(4)),
-        child: Text(
-          isSensorOk ? LangService().t('pumpStatusOk') : LangService().t('pumpTankEmpty'),
-          style: TextStyle(
-              color: isSensorOk ? Colors.greenAccent : Colors.redAccent,
-              fontSize: 9,
-              fontWeight: FontWeight.w900),
-        ),
-      ),
+      // FIN DE L'AMPUTATION : Le badge OK/NOK a été éradiqué.
     ]);
   }
 }
