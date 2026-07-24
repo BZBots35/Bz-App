@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -75,6 +76,218 @@ class PumpPdfService {
           textAlign: pw.TextAlign.center),
       ])));
 
+  // ── Courbe épaisseur/métrage — dessin manuel bas niveau (PdfGraphics) ──
+  // Pas de dépendance à une lib de charts pour le PDF : on trace les axes
+  // et la courbe nous-mêmes, avec les primitives officielles du package
+  // `pdf` (moveTo/lineTo/drawLine + strokePath), pour rester dans le même
+  // style que le reste du document (widgets construits à la main).
+  //
+  // ⚠️ Si cette section ne compile pas telle quelle chez toi (API légèrement
+  // différente selon la version exacte du package `pdf`), dis-le-moi avec
+  // le message d'erreur exact et je corrige — c'est la partie du fichier
+  // la plus susceptible d'avoir besoin d'un petit ajustement.
+  pw.Widget _thicknessChart(
+    String passLabel,
+    List<dynamic> rawPoints,
+    double targetEpaisseur,
+    pw.Font font,
+    pw.Font bold,
+  ) {
+    if (rawPoints.length < 2) return pw.SizedBox();
+
+    final pts = rawPoints
+        .map((p) => (p as List)
+            .map((e) => (e as num).toDouble())
+            .toList())
+        .toList();
+
+    final maxX = pts.last[0] <= 0 ? 1.0 : pts.last[0];
+    final maxYData = pts.map((p) => p[1]).reduce(math.max);
+    final maxY = math.max(maxYData, targetEpaisseur) * 1.25;
+
+    const chartW = 460.0;
+    const chartH = 120.0;
+    const padTop = 11.0;    // place pour le titre "Épaisseur (mm)"
+    const padLeft = 32.0;   // place pour les graduations mm
+    const padBottom = 14.0; // place pour les graduations m
+    const yTickCount = 4;   // nombre d'intervalles sur l'axe épaisseur
+    const xTickCount = 5;   // nombre d'intervalles sur l'axe métrage
+    final plotW = chartW - padLeft;
+    final plotH = chartH;
+    const totalH = padTop + chartH + padBottom;
+
+    return pw.Container(
+      margin: const pw.EdgeInsets.only(bottom: 12),
+      padding: const pw.EdgeInsets.all(10),
+      decoration: pw.BoxDecoration(
+        color: _greyL,
+        borderRadius: pw.BorderRadius.circular(6)),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(passLabel,
+              style: pw.TextStyle(font: bold, fontSize: 9, color: _dark)),
+          pw.SizedBox(height: 6),
+          pw.Stack(
+            children: [
+              // ── Dessin des axes, grille et courbe (bas niveau) ──
+              // Le canevas PDF a son origine EN BAS À GAUCHE (contrairement
+              // à Flutter) — tout le tracé est décalé de +padBottom pour
+              // que le graphique occupe le haut du cadre et laisse la
+              // place aux graduations d'abscisse en dessous, pas dedans.
+              pw.SizedBox(
+                width: chartW,
+                height: totalH,
+                child: pw.CustomPaint(
+                  size: const PdfPoint(chartW, totalH),
+                  painter: (PdfGraphics canvas, PdfPoint size) {
+                    // Grille horizontale (graduations mm), fine et discrète
+                    canvas..setColor(_grey)..setLineWidth(0.3);
+                    for (int i = 0; i <= yTickCount; i++) {
+                      final y = padBottom + plotH * i / yTickCount;
+                      canvas.drawLine(padLeft, y, chartW, y);
+                    }
+                    canvas.strokePath();
+
+                    // Grille verticale (graduations m), fine et discrète
+                    canvas..setColor(_grey)..setLineWidth(0.3);
+                    for (int i = 0; i <= xTickCount; i++) {
+                      final x = padLeft + plotW * i / xTickCount;
+                      canvas.drawLine(x, padBottom, x, padBottom + plotH);
+                    }
+                    canvas.strokePath();
+
+                    // Axes principaux, plus marqués
+                    canvas
+                      ..setColor(_dark)
+                      ..setLineWidth(0.8)
+                      ..drawLine(padLeft, padBottom, padLeft, padBottom + plotH)
+                      ..drawLine(padLeft, padBottom, chartW, padBottom)
+                      ..strokePath();
+
+                    // Ligne cible (pointillés, en orange pour la distinguer
+                    // nettement de la grille et de la courbe)
+                    final yTarget = padBottom + (targetEpaisseur / maxY) * plotH;
+                    canvas..setColor(_orange)..setLineWidth(0.8);
+                    double dx = padLeft;
+                    while (dx < chartW) {
+                      canvas.drawLine(dx, yTarget, dx + 4, yTarget);
+                      dx += 8;
+                    }
+                    canvas.strokePath();
+
+                    // Courbe épaisseur mesurée
+                    canvas..setColor(_cyan)..setLineWidth(1.4);
+                    for (int i = 0; i < pts.length; i++) {
+                      final x = padLeft + (pts[i][0] / maxX) * plotW;
+                      final y = padBottom + (pts[i][1] / maxY) * plotH;
+                      if (i == 0) {
+                        canvas.moveTo(x, y);
+                      } else {
+                        canvas.lineTo(x, y);
+                      }
+                    }
+                    canvas.strokePath();
+                  },
+                ),
+              ),
+              // ── Titre axe Y, en haut à côté de l'ordonnée ──
+              pw.Positioned(
+                left: 0,
+                top: 0,
+                child: pw.Text('Épaisseur (mm)',
+                    style: pw.TextStyle(font: bold, fontSize: 7, color: _dark)),
+              ),
+              // ── Graduations Y (mm), en overlay texte ──
+              for (int i = 0; i <= yTickCount; i++)
+                pw.Positioned(
+                  left: 0,
+                  top: padTop + chartH - (plotH * i / yTickCount) - 4,
+                  child: pw.SizedBox(
+                    width: padLeft - 4,
+                    child: pw.Text(
+                      (maxY * i / yTickCount).toStringAsFixed(1),
+                      style: pw.TextStyle(font: font, fontSize: 6, color: _grey),
+                      textAlign: pw.TextAlign.right,
+                    ),
+                  ),
+                ),
+              // ── Graduations X (m), en overlay texte, sous le graphique ──
+              for (int i = 0; i <= xTickCount; i++)
+                pw.Positioned(
+                  left: padLeft + (plotW * i / xTickCount) - 12,
+                  top: padTop + chartH + 2,
+                  child: pw.SizedBox(
+                    width: 24,
+                    child: pw.Text(
+                      (maxX * i / xTickCount).toStringAsFixed(1),
+                      style: pw.TextStyle(font: font, fontSize: 6, color: _grey),
+                      textAlign: pw.TextAlign.center,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          pw.SizedBox(height: 4),
+          // ── Titre axe X (le titre axe Y est maintenant au-dessus du graphique) ──
+          pw.Align(
+            alignment: pw.Alignment.centerRight,
+            child: pw.Text('Métrage (m)',
+                style: pw.TextStyle(font: bold, fontSize: 7, color: _dark)),
+          ),
+          pw.SizedBox(height: 6),
+          // ── Légende ──
+          pw.Row(children: [
+            pw.Container(width: 14, height: 2, color: _cyan),
+            pw.SizedBox(width: 4),
+            pw.Text('Épaisseur mesurée',
+                style: pw.TextStyle(font: font, fontSize: 7, color: _grey)),
+            pw.SizedBox(width: 16),
+            pw.Container(width: 14, height: 2, color: _orange),
+            pw.SizedBox(width: 4),
+            pw.Text('Cible : ${targetEpaisseur.toStringAsFixed(2)} mm',
+                style: pw.TextStyle(font: font, fontSize: 7, color: _grey)),
+          ]),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _thicknessSection(
+    String? passesDataJson,
+    double targetEpaisseur,
+    pw.Font font,
+    pw.Font bold,
+  ) {
+    if (passesDataJson == null || passesDataJson.isEmpty) {
+      return pw.SizedBox();
+    }
+    Map<String, dynamic> passesData;
+    try {
+      passesData = Map<String, dynamic>.from(jsonDecode(passesDataJson));
+    } catch (_) {
+      return pw.SizedBox();
+    }
+    if (passesData.isEmpty) return pw.SizedBox();
+
+    final sortedKeys = passesData.keys.toList()
+      ..sort((a, b) => (int.tryParse(a) ?? 0).compareTo(int.tryParse(b) ?? 0));
+
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        _sectionTitle('Épaisseur appliquée mesurée', _cyanD, bold),
+        ...sortedKeys.map((k) => _thicknessChart(
+              'Passe N°$k',
+              passesData[k] as List,
+              targetEpaisseur,
+              font,
+              bold,
+            )),
+      ],
+    );
+  }
+
   String _rapportRef(String nom) {
     final now = DateTime.now();
     final ref = '${now.year}${now.month.toString().padLeft(2,'0')}'
@@ -108,6 +321,9 @@ class PumpPdfService {
     final lon   = double.tryParse(d['longueur'] as String? ?? '0') ?? 0;
     final dia   = double.tryParse(d['diametre'] as String? ?? '100') ?? 100;
     final passes = d['passes'] as int? ?? 4;
+    final passesDataJson = d['passesData'] as String?;
+    final resinAppliedRaw = d['resinAppliedTotal'];
+    final resinApplied = resinAppliedRaw != null ? (resinAppliedRaw as num).toDouble() : null;
     final resin  = calcResin(lon, dia, passes);
     final partA  = resin * (2/3);
     final partB  = resin * (1/3);
@@ -123,10 +339,30 @@ class PumpPdfService {
     final ref    = _rapportRef(ch['nom'] ?? 'CH');
     final date   = _dateStr();
 
-    pdf.addPage(pw.Page(
+    pdf.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.all(0),
-      build: (ctx) => pw.Column(children: [
+      header: (ctx) => ctx.pageNumber == 1
+        ? pw.SizedBox()
+        : pw.Container(
+            width: double.infinity,
+            padding: const pw.EdgeInsets.fromLTRB(32, 10, 32, 8),
+            color: _dark,
+            child: pw.Text('BZBOTS — Rapport (suite)', style: pw.TextStyle(
+              font: bold, fontSize: 9, color: _cyan))),
+      footer: (ctx) => pw.Container(
+        width: double.infinity,
+        padding: const pw.EdgeInsets.fromLTRB(32, 8, 32, 8),
+        color: _greyL,
+        child: pw.Row(
+          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+          children: [
+          pw.Text('BZBots Systems © ${DateTime.now().year} — Confidentiel',
+            style: pw.TextStyle(font: font, fontSize: 7, color: _grey)),
+          pw.Text('Réf. $ref — Page ${ctx.pageNumber}/${ctx.pagesCount}',
+            style: pw.TextStyle(font: font, fontSize: 7, color: _grey)),
+        ])),
+      build: (ctx) => [
 
         // ── Page de garde ──────────────────────
         pw.Container(
@@ -159,7 +395,7 @@ class PumpPdfService {
           ])),
 
         // ── Corps du document ──────────────────
-        pw.Expanded(child: pw.Padding(
+        pw.Padding(
           padding: const pw.EdgeInsets.fromLTRB(32, 20, 32, 0),
           child: pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -245,7 +481,7 @@ class PumpPdfService {
             // Bilan résine
             _sectionTitle('Bilan Résine', _orange, bold),
             pw.Row(children: [
-              _statBox('Volume total', '${resin.toStringAsFixed(2)} L',
+              _statBox('Volume théorique', '${resin.toStringAsFixed(2)} L',
                 _orange, font, bold),
               _statBox('Composant A (2/3)',
                 '${partA.toStringAsFixed(2)} L', _cyan, font, bold),
@@ -254,7 +490,30 @@ class PumpPdfService {
               _statBox("Temps d'injection", timeStr,
                 _green, font, bold),
             ]),
-            pw.SizedBox(height: 14),
+            if (resinApplied != null) ...[
+              pw.SizedBox(height: 8),
+              pw.Row(children: [
+                _statBox('Volume réel mesuré',
+                  '${resinApplied.toStringAsFixed(2)} L', _green, font, bold),
+                _statBox('Écart vs théorique',
+                  '${(resinApplied - resin) >= 0 ? '+' : ''}'
+                  '${(resinApplied - resin).toStringAsFixed(2)} L',
+                  (resinApplied - resin).abs() / (resin == 0 ? 1 : resin) > 0.1
+                    ? _red : _green,
+                  font, bold),
+                _statBox('Écart en %',
+                  resin > 0
+                    ? '${((resinApplied - resin) / resin * 100).toStringAsFixed(1)}%'
+                    : '—',
+                  (resinApplied - resin).abs() / (resin == 0 ? 1 : resin) > 0.1
+                    ? _red : _green,
+                  font, bold),
+              ]),
+            ],
+            pw.SizedBox(height: 4),
+
+            // Courbe épaisseur mesurée par passe (si disponible)
+            _thicknessSection(passesDataJson, epaisseur, font, bold),
 
             // Barre progression passes
             _sectionTitle('Séquence d\'Injection', _dark, bold),
@@ -282,7 +541,7 @@ class PumpPdfService {
                 style: pw.TextStyle(font: bold, fontSize: 9,
                   color: _green)))),
 
-            pw.Spacer(),
+            pw.SizedBox(height: 14),
 
             // Section signatures
             _sectionTitle('Validation', _dark, bold),
@@ -318,23 +577,10 @@ class PumpPdfService {
                     font: font, fontSize: 9, color: _grey)),
                 ]))),
             ]),
+            pw.SizedBox(height: 16),
           ]),
-        )),
-
-        // ── Pied de page ───────────────────────
-        pw.Container(
-          width: double.infinity,
-          padding: const pw.EdgeInsets.fromLTRB(32, 8, 32, 8),
-          color: _greyL,
-          child: pw.Row(
-            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-            children: [
-            pw.Text('BZBots Systems © ${DateTime.now().year} — Confidentiel',
-              style: pw.TextStyle(font: font, fontSize: 7, color: _grey)),
-            pw.Text('Réf. $ref — Page 1/1',
-              style: pw.TextStyle(font: font, fontSize: 7, color: _grey)),
-          ])),
-      ]),
+        ),
+      ],
     ));
     return pdf.save();
   }

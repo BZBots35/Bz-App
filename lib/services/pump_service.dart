@@ -1,5 +1,7 @@
 // ignore_for_file: deprecated_member_use
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:appwrite/appwrite.dart';
 import 'package:appwrite/models.dart' as models;
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -18,6 +20,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// ⚠️ Suppose que `models.Document` expose `toMap()` / `Document.fromMap()`
 /// (standard dans le SDK Appwrite Dart). Si ta version du package appwrite
 /// ne les a pas, dis-le-moi et j'adapte la sérialisation.
+///
+/// ⚠️ NOUVEAU : `passesData` sur `updateCanalisation` — stocke, par passe,
+/// une courbe allégée épaisseur (mm) / métrage (m) sous forme de chaîne
+/// JSON (ex: {"1": [[0.1, 0.82], [0.2, 0.79], ...], "2": [...]}).
+/// Nécessite un attribut String sur la collection Appwrite
+/// `pump_canalisations` (taille conseillée : au moins 50000 caractères,
+/// pour tenir plusieurs passes sur une longue canalisation).
 class PumpService {
   static const String endpoint           = 'https://cloud.appwrite.io/v1';
   static const String projectId          = '69ccd61d0017c7eaedee';
@@ -27,21 +36,61 @@ class PumpService {
 
   late Client    _client;
   late Databases _db;
+  StreamSubscription<dynamic>? _connectivitySub;
 
   PumpService() {
     _client = Client()
       ..setEndpoint(endpoint)
       ..setProject(projectId);
     _db = Databases(_client);
+    _startAutoSync();
+  }
+
+  // Écoute les changements de connectivité et rejoue automatiquement la
+  // file d'attente hors-ligne dès qu'un accès Internet RÉEL revient (pas
+  // juste une interface réseau — voir _isOnline()). Typiquement : tu
+  // quittes le hotspot de la Pi et retrouves ton WiFi/4G habituel, tout
+  // ce qui a été modifié en local pendant la déconnexion part vers
+  // Appwrite sans action manuelle de ta part.
+  void _startAutoSync() {
+    _connectivitySub = Connectivity().onConnectivityChanged.listen((_) async {
+      // Petite pause pour laisser le temps au réseau de vraiment se
+      // stabiliser après un changement, avant de tester la joignabilité.
+      await Future.delayed(const Duration(seconds: 2));
+      if (await _isOnline()) {
+        await syncPendingOperations();
+      }
+    });
+  }
+
+  /// À appeler si besoin de libérer proprement l'écoute réseau (rarement
+  /// nécessaire ici, PumpService vit généralement toute la durée de l'app).
+  void dispose() {
+    _connectivitySub?.cancel();
   }
 
   // ─────────────────────────────────────────────
   // CONNECTIVITÉ
   // ─────────────────────────────────────────────
 
+  // Vérifie qu'Appwrite est réellement joignable, pas juste qu'une
+  // interface réseau existe. Important : un téléphone connecté au hotspot
+  // WiFi local de la Pi (sans accès Internet) est vu comme "connecté" par
+  // Connectivity().checkConnectivity(), alors qu'il ne peut pas du tout
+  // atteindre Appwrite — sans ce vrai test, l'app tenterait des écritures
+  // en ligne qui échouent/timeout au lieu de basculer proprement en file
+  // d'attente hors-ligne.
   Future<bool> _isOnline() async {
-    final result = await Connectivity().checkConnectivity();
-    return result != ConnectivityResult.none;
+    final connectivityResult = await Connectivity().checkConnectivity();
+    if (connectivityResult == ConnectivityResult.none) return false;
+
+    try {
+      final result = await InternetAddress.lookup('cloud.appwrite.io')
+          .timeout(const Duration(seconds: 4));
+      return result.isNotEmpty && result.first.rawAddress.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
   }
 
   // ─────────────────────────────────────────────
@@ -89,6 +138,34 @@ class PumpService {
       final before = current.length;
       current.removeWhere((d) => d.$id == docId);
       if (current.length != before) await _cacheList(key, current);
+    }
+  }
+
+  /// Fusionne `payload` dans le document mis en cache correspondant à
+  /// `docId`, partout où il apparaît (potentiellement plusieurs clés de
+  /// cache). Utilisé pour que les écritures hors-ligne (updateCanalisation,
+  /// updateChantier...) soient visibles immédiatement dans l'app, sans
+  /// attendre la synchronisation vers Appwrite.
+  Future<void> _updateIdInCachesWithPrefix(
+      String prefix, String docId, Map<String, dynamic> payload) async {
+    final prefs = await SharedPreferences.getInstance();
+    final keys = prefs.getKeys().where((k) => k.startsWith(prefix));
+    for (final key in keys) {
+      final current = await _readCachedList(key);
+      final idx = current.indexWhere((d) => d.$id == docId);
+      if (idx < 0) continue;
+      final merged = <String, dynamic>{
+        '\$id': current[idx].$id,
+        '\$collectionId': current[idx].$collectionId,
+        '\$databaseId': current[idx].$databaseId,
+        '\$createdAt': current[idx].$createdAt,
+        '\$updatedAt': DateTime.now().toIso8601String(),
+        '\$permissions': current[idx].$permissions,
+        ...current[idx].data,
+        ...payload,
+      };
+      current[idx] = models.Document.fromMap(merged);
+      await _cacheList(key, current);
     }
   }
 
@@ -227,13 +304,25 @@ class PumpService {
     final cacheKey = _chantiersCacheKey(userId, role);
 
     if (await _isOnline()) {
+      // Pousse d'abord tout ce qui est en attente — sinon une lecture
+      // fraîche ici pourrait récupérer une version obsolète côté serveur
+      // et écraser le cache local à jour avec des données périmées.
+      await syncPendingOperations();
       try {
         final queries = (role == 'super_admin' || role == 'admin')
           ? <String>[] : [Query.equal('userID', userId)];
         final result = await _db.listDocuments(
           databaseId: databaseId, collectionId: chantiersTable, queries: queries);
-        await _cacheList(cacheKey, result.documents);
-        return result.documents;
+        // Filet de sécurité : si un document créé hors-ligne n'a malgré
+        // tout pas encore été synchronisé (ex: la sync ci-dessus a
+        // échoué), on ne le perd pas de vue — on le garde affiché en
+        // plus des résultats serveur, en attendant le prochain essai.
+        final previouslyCached = await _readCachedList(cacheKey);
+        final stillPendingLocal =
+            previouslyCached.where((d) => d.$id.startsWith('local_'));
+        final merged = [...result.documents, ...stillPendingLocal];
+        await _cacheList(cacheKey, merged);
+        return merged;
       } catch (e) {
         return _readCachedList(cacheKey);
       }
@@ -293,6 +382,7 @@ class PumpService {
         documentId: docId, data: payload);
       return;
     }
+    await _updateIdInCachesWithPrefix('pump_cache_chantiers_', docId, payload);
     await _queueOp({
       'type': 'updateChantierParams',
       'data': {'docId': docId, 'payload': payload},
@@ -312,6 +402,7 @@ class PumpService {
         documentId: docId, data: payload);
       return;
     }
+    await _updateIdInCachesWithPrefix('pump_cache_chantiers_', docId, payload);
     await _queueOp({
       'type': 'updateChantier',
       'data': {'docId': docId, 'payload': payload},
@@ -336,17 +427,40 @@ class PumpService {
     final cacheKey = _canalisationsCacheKey(chantierId);
 
     if (await _isOnline()) {
+      // Même précaution que getChantiers : on vide la file d'attente
+      // avant de lire, sinon on risque d'écraser le cache local à jour
+      // (ex: passesDone après une passe) avec une version serveur pas
+      // encore rafraîchie.
+      await syncPendingOperations();
       try {
         final result = await _db.listDocuments(
           databaseId: databaseId, collectionId: canalisationsTable,
           queries: [Query.equal('chantierID', chantierId)]);
-        await _cacheList(cacheKey, result.documents);
-        return result.documents;
+        // Filet de sécurité : une canalisation créée hors-ligne pas
+        // encore synchronisée ne doit jamais disparaître de la liste.
+        final previouslyCached = await _readCachedList(cacheKey);
+        final stillPendingLocal =
+            previouslyCached.where((d) => d.$id.startsWith('local_'));
+        final merged = [...result.documents, ...stillPendingLocal];
+        await _cacheList(cacheKey, merged);
+        return merged;
       } catch (e) {
         return _readCachedList(cacheKey);
       }
     }
     return _readCachedList(cacheKey);
+  }
+
+  /// Récupère une seule canalisation par ID (cherche dans la liste du
+  /// chantier). Utile pour rafraîchir une donnée précise (ex: passesData)
+  /// sans re-télécharger/écraser tout le cache d'un coup.
+  Future<models.Document?> getCanalisationById(
+      String chantierId, String docId) async {
+    final list = await getCanalisations(chantierId);
+    for (final d in list) {
+      if (d.$id == docId) return d;
+    }
+    return null;
   }
 
   Future<models.Document> createCanalisation({
@@ -392,6 +506,7 @@ class PumpService {
   Future<void> updateCanalisation(String docId, {
     String? label, String? longueur, String? diametre,
     int? passes, String? statut, int? passesDone,
+    String? passesData, double? resinAppliedTotal,
   }) async {
     final payload = <String, dynamic>{};
     if (label      != null) payload['label']      = label;
@@ -400,12 +515,19 @@ class PumpService {
     if (passes     != null) payload['passes']     = passes;
     if (statut     != null) payload['statut']     = statut;
     if (passesDone != null) payload['passesDone'] = passesDone;
+    if (passesData != null) payload['passesData'] = passesData;
+    if (resinAppliedTotal != null) payload['resinAppliedTotal'] = resinAppliedTotal;
 
     if (await _isOnline()) {
       await _db.updateDocument(databaseId: databaseId,
         collectionId: canalisationsTable, documentId: docId, data: payload);
       return;
     }
+    // Hors ligne : applique tout de suite en local (visible immédiatement
+    // dans l'app, ex: passesDone après une passe), en plus de la mise en
+    // file d'attente pour la synchronisation ultérieure vers Appwrite.
+    await _updateIdInCachesWithPrefix(
+        'pump_cache_canalisations_', docId, payload);
     await _queueOp({
       'type': 'updateCanalisation',
       'data': {'docId': docId, 'payload': payload},

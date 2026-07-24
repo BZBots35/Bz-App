@@ -1,9 +1,11 @@
 // ignore_for_file: deprecated_member_use
 import 'dart:async';
+import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:appwrite/models.dart' as models;
+import 'package:fl_chart/fl_chart.dart';
 import '../services/pump_service.dart';
 import 'pump_control_screen.dart';
 
@@ -68,18 +70,160 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
   // ── État Passes ───────────────────────────────
   int _passesDone = 0;
 
+  // ── Courbes épaisseur/métrage par passe (clé = numéro de passe) ──
+  // Chargées depuis le champ Appwrite `passesData` (JSON), rafraîchies
+  // après chaque passe terminée pour pouvoir les reconsulter ici.
+  Map<String, dynamic> _passesData = {};
+  late models.Document _currentCanalisationDoc;
+
   double get _qteParPasse =>
       _longueur * (math.pi * _diametre * widget.epaisseur / 1000);
 
   @override
   void initState() {
     super.initState();
+    _currentCanalisationDoc = widget.canalisationDoc;
     _checkPiConnection();
     final d = widget.canalisationDoc.data;
     _label    = d['label']    as String? ?? '';
     _longueur = double.tryParse(d['longueur'] as String? ?? '10') ?? 10;
     _diametre = double.tryParse(d['diametre'] as String? ?? '100') ?? 100;
     _passes   = d['passes']   as int? ?? 4;
+    _passesDone = d['passesDone'] as int? ?? 0;
+    _loadPassesData(d);
+  }
+
+  void _loadPassesData(Map<String, dynamic> data) {
+    final raw = data['passesData'] as String?;
+    if (raw == null || raw.isEmpty) {
+      _passesData = {};
+      return;
+    }
+    try {
+      _passesData = Map<String, dynamic>.from(json.decode(raw));
+    } catch (_) {
+      _passesData = {};
+    }
+  }
+
+  // Recharge la canalisation depuis Appwrite pour récupérer la courbe
+  // fraîchement sauvegardée par PumpControlScreen à la fin d'une passe.
+  Future<void> _refreshCanalisation() async {
+    final fresh = await _service.getCanalisationById(
+        widget.chantierDoc.$id, widget.canalisationDoc.$id);
+    if (fresh != null && mounted) {
+      setState(() {
+        _currentCanalisationDoc = fresh;
+        _loadPassesData(fresh.data);
+      });
+    }
+  }
+
+  // ── Popup de consultation de la courbe d'une passe ──
+  void _showPassCurve(int passNum) {
+    final raw = _passesData['$passNum'];
+    if (raw == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Aucune courbe enregistrée pour cette passe.')));
+      return;
+    }
+    final points = (raw as List)
+        .map((p) => FlSpot((p[0] as num).toDouble(), (p[1] as num).toDouble()))
+        .toList();
+    if (points.length < 2) return;
+    final maxDataY = points.map((s) => s.y).reduce((a, b) => a > b ? a : b);
+    final maxY = (maxDataY > widget.epaisseur ? maxDataY : widget.epaisseur) * 1.2;
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF0D0D0D),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: const Color(0xFF22D3EE).withOpacity(0.4))),
+        title: Row(children: [
+          const Icon(Icons.show_chart, color: Color(0xFF22D3EE), size: 20),
+          const SizedBox(width: 8),
+          Text('Courbe — Passe N°$passNum',
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w900, fontSize: 13)),
+        ]),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 220,
+          child: LineChart(
+            LineChartData(
+              minX: 0,
+              maxX: points.last.x,
+              minY: 0,
+              maxY: maxY,
+              gridData: FlGridData(
+                show: true,
+                drawVerticalLine: false,
+                getDrawingHorizontalLine: (v) =>
+                    FlLine(color: Colors.white.withOpacity(0.06), strokeWidth: 1),
+              ),
+              titlesData: FlTitlesData(
+                topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 22,
+                    getTitlesWidget: (v, meta) => Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text('${v.toStringAsFixed(1).replaceAll('.', ',')}m',
+                          style: TextStyle(color: Colors.grey[500], fontSize: 8)),
+                    ),
+                  ),
+                ),
+                leftTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 32,
+                    getTitlesWidget: (v, meta) => Text(v.toStringAsFixed(1),
+                        style: TextStyle(color: Colors.grey[500], fontSize: 8)),
+                  ),
+                ),
+              ),
+              borderData: FlBorderData(
+                  show: true, border: Border.all(color: Colors.white.withOpacity(0.08))),
+              extraLinesData: ExtraLinesData(horizontalLines: [
+                HorizontalLine(
+                  y: widget.epaisseur,
+                  color: Colors.grey[400]!.withOpacity(0.6),
+                  strokeWidth: 1,
+                  dashArray: [4, 3],
+                  label: HorizontalLineLabel(
+                      show: true,
+                      alignment: Alignment.topRight,
+                      style: TextStyle(color: Colors.grey[400], fontSize: 8),
+                      labelResolver: (line) =>
+                          'Cible ${widget.epaisseur.toStringAsFixed(1)}mm'),
+                ),
+              ]),
+              lineBarsData: [
+                LineChartBarData(
+                  spots: points,
+                  isCurved: true,
+                  curveSmoothness: 0.2,
+                  color: const Color(0xFF22D3EE),
+                  barWidth: 2.5,
+                  dotData: const FlDotData(show: false),
+                  belowBarData: BarAreaData(
+                      show: true, color: const Color(0xFF22D3EE).withOpacity(0.08)),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Fermer', style: TextStyle(color: Colors.grey))),
+        ],
+      ),
+    );
   }
 
   // ── Modal sécurité avant GO ────────────────────
@@ -164,7 +308,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
         context,
         MaterialPageRoute(
           builder: (_) => PumpControlScreen(
-            canalisationDoc: widget.canalisationDoc,
+            canalisationDoc: _currentCanalisationDoc,
             chantierDoc:     widget.chantierDoc,
             epaisseur:       widget.epaisseur,
             resinType:       widget.resinType,
@@ -183,10 +327,14 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
       // result == true → passe terminée avec succès
       if (result == true && mounted) {
         setState(() => _passesDone++);
+        // Récupère la courbe que PumpControlScreen vient de sauvegarder,
+        // pour pouvoir la reconsulter tout de suite depuis cet écran.
+        await _refreshCanalisation();
         if (_passesDone >= _passes) {
           await _service.updateCanalisation(
             widget.canalisationDoc.$id,
             statut: 'termine',
+            passesDone: _passesDone,
           );
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -199,6 +347,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
           await _service.updateCanalisation(
             widget.canalisationDoc.$id,
             statut: 'en_cours',
+            passesDone: _passesDone,
           );
         }
       }
@@ -376,6 +525,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
           final isDone  = passNum <= _passesDone;
           // Une passe est disponible si c'est la prochaine à faire
           final isNext  = passNum == _passesDone + 1;
+          final hasCurve = _passesData.containsKey('$passNum');
 
           Color borderColor;
           if (isDone)       borderColor = Colors.green.withOpacity(0.4);
@@ -426,9 +576,32 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
                                   : Colors.grey[600],
                           fontSize: 10,
                           fontWeight: FontWeight.w700))),
-              if (isDone)
-                const Icon(Icons.check_circle, color: Colors.green, size: 14)
-              else if (isNext)
+              if (isDone) ...[
+                if (hasCurve)
+                  GestureDetector(
+                    onTap: () => _showPassCurve(passNum),
+                    child: Container(
+                        margin: const EdgeInsets.only(right: 6),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                            color: const Color(0xFF22D3EE).withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                                color: const Color(0xFF22D3EE).withOpacity(0.4))),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          const Icon(Icons.show_chart,
+                              color: Color(0xFF22D3EE), size: 12),
+                          const SizedBox(width: 3),
+                          const Text('Courbe',
+                              style: TextStyle(
+                                  color: Color(0xFF22D3EE),
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w900)),
+                        ])),
+                  ),
+                const Icon(Icons.check_circle, color: Colors.green, size: 14),
+              ] else if (isNext)
                 GestureDetector(
                     onTap: () => _showSafetyModal(passNum),
                     child: Container(

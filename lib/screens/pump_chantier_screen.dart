@@ -24,6 +24,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
   final _service = PumpService();
   List<models.Document> _canalisations = [];
   bool _loading = true;
+  bool _addingCanalisation = false;
 
   // Paramètres globaux
   String _resinType     = 'spraycoat_plus';
@@ -95,7 +96,10 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
       builder: (_) => _AddCanalisationSheet(
         defaultPasses: _desiredPasses),
     );
-    if (result != null) {
+    if (result == null) return;
+
+    setState(() => _addingCanalisation = true);
+    try {
       await _service.createCanalisation(
         chantierId: widget.chantierDoc.$id,
         label:      result['label'],
@@ -104,7 +108,25 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
         passes:     result['passes'],
         userId:     widget.userId,
       );
-      _loadCanalisations();
+      await _loadCanalisations();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('✓ Canalisation ajoutée'),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating));
+      }
+    } catch (e) {
+      // Erreur rendue visible au lieu de disparaître silencieusement —
+      // le message exact (permission, schéma, réseau...) s'affiche ici.
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Erreur lors de la création : $e'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 8)));
+      }
+    } finally {
+      if (mounted) setState(() => _addingCanalisation = false);
     }
   }
 
@@ -245,12 +267,16 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
         ),
       ]),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addCanalisation,
+        onPressed: _addingCanalisation ? null : _addCanalisation,
         backgroundColor: const Color(0xFF22D3EE),
         foregroundColor: Colors.black,
-        icon: const Icon(Icons.add),
-        label: const Text('Ajouter ligne',
-          style: TextStyle(fontWeight: FontWeight.w700)),
+        icon: _addingCanalisation
+            ? const SizedBox(
+                width: 16, height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+            : const Icon(Icons.add),
+        label: Text(_addingCanalisation ? 'Ajout...' : 'Ajouter ligne',
+          style: const TextStyle(fontWeight: FontWeight.w700)),
       ),
     );
   }
