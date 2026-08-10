@@ -1,11 +1,14 @@
 // ignore_for_file: deprecated_member_use
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:appwrite/models.dart' as models;
 import 'package:fl_chart/fl_chart.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'pump_debug_screen.dart';
 import '../services/lang_service.dart';
 import '../services/pump_service.dart';
@@ -73,16 +76,96 @@ class _PumpControlScreenState extends State<PumpControlScreen>
     }
   }
 
+  // ── Vidéo timelapse (Pi caméra dédiée, même IP que la pompe, port 5002) ──
+
+  // Base URL de la Pi caméra, déduite de widget.piBase (même hôte, port
+  // dédié différent de celui du serveur pompe).
+  String get _piCameraBase {
+    final uri = Uri.parse(widget.piBase);
+    return uri.replace(port: 5002).toString();
+  }
+
+  // Démarre l'enregistrement timelapse. Best-effort : une vidéo manquée
+  // ne doit jamais bloquer le fonctionnement de la pompe, donc on avale
+  // l'erreur ici (juste loguée) plutôt que de la remonter à l'appelant.
+  Future<void> _startVideoRecording() async {
+    try {
+      final resp = await http
+          .post(Uri.parse('$_piCameraBase/video/start'))
+          .timeout(const Duration(seconds: 3));
+      if (resp.statusCode == 200) {
+        print("Enregistrement vidéo démarré");
+      } else {
+        print("Erreur démarrage vidéo (${resp.statusCode}) : ${resp.body}");
+      }
+    } catch (e) {
+      print("Erreur de connexion caméra (démarrage) : $e");
+    }
+  }
+
+  // Arrête l'enregistrement sans le partager (passe abandonnée sans
+  // validation) — libère quand même la caméra côté Pi pour ne pas la
+  // laisser bloquée en enregistrement indéfiniment.
+  Future<void> _stopVideoRecording() async {
+    try {
+      await http
+          .post(Uri.parse('$_piCameraBase/video/stop'))
+          .timeout(const Duration(seconds: 5));
+    } catch (e) {
+      print("Erreur arrêt caméra : $e");
+    }
+  }
+
+  // Arrête l'enregistrement, récupère le fichier fini depuis la Pi
+  // caméra, et ouvre la feuille de partage du téléphone — même flux
+  // que sharePdf() dans pump_pdf_service.dart, mais pour la vidéo.
+  Future<void> _finalizeAndShareVideo() async {
+    try {
+      await http
+          .post(Uri.parse('$_piCameraBase/video/stop'))
+          .timeout(const Duration(seconds: 5));
+
+      final resp = await http
+          .get(Uri.parse('$_piCameraBase/video/latest'))
+          .timeout(const Duration(seconds: 30));
+
+      if (resp.statusCode != 200) {
+        print("Vidéo indisponible (${resp.statusCode})");
+        return;
+      }
+
+      final tempDir = await getTemporaryDirectory();
+      final filename =
+          'timelapse_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final file = File('${tempDir.path}/$filename');
+      await file.writeAsBytes(resp.bodyBytes);
+
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: 'Vidéo timelapse de la passe',
+      );
+    } catch (e) {
+      print("Erreur récupération/partage vidéo : $e");
+    }
+  }
+
   // Convertit le débit commandé (0 – 0.8 L/min) en pourcentage PWM (0 – 100)
   // À ajuster si la correspondance réelle débit/PWM du moteur diffère.
   int _debitToPwmPercent() {
     return ((_debitCommand / 0.8) * 100).round().clamp(0, 100);
   }
 
+  // Convertit la vitesse tracteur commandée (0 – 1.2 m/min) en pourcentage
+  // PWM (0 – 100) pour SPEED4. À ajuster si la correspondance réelle
+  // vitesse/PWM du moteur diffère.
+  int _vitesseToPwmPercent() {
+    return ((_vitesseCommand / 1.2) * 100).round().clamp(0, 100);
+  }
+
   Future<void> _checkPiConnection() async {
     try {
       final resp = await http.get(
-        Uri.parse('${widget.piBase}/ping'),
+        Uri.parse('${widget.piBase}/health'),
       ).timeout(const Duration(seconds: 2));
       setState(() => _piConnected = resp.statusCode == 200);
     } catch (_) {
@@ -132,6 +215,16 @@ class _PumpControlScreenState extends State<PumpControlScreen>
           if (niveauResineRaw != null) _niveauResineOk = niveauResineRaw == 0;
           final niveauDurcisseurRaw = (data['niveau_durcisseur'] as num?)?.toInt();
           if (niveauDurcisseurRaw != null) _niveauDurcisseurOk = niveauDurcisseurRaw == 0;
+
+          // État réel du tracteur (moteur 4) — synchronise le bouton avec
+          // l'Arduino (ex : coupé automatiquement par un STOP pompe/niveau
+          // bas, ou état après reconnexion à l'app).
+          final tracteurOnRaw = (data['tracteur_on'] as num?)?.toInt();
+          if (tracteurOnRaw != null) _tracteurOn = tracteurOnRaw == 1;
+
+          // Sens réel du tracteur, même logique de synchronisation.
+          final tracteurSensRaw = (data['tracteur_sens'] as num?)?.toInt();
+          if (tracteurSensRaw != null) _tracteurSensAvant = tracteurSensRaw == 1;
         });
 
         // Capteur niveau bas + pompe en marche -> avertissement avec décompte.
@@ -167,6 +260,17 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   bool   _isPumpOn       = false;
   double _debitCommand   = 0.0;   // 0.0 – 0.8 L/min
   double _vitesseCommand = 0.0;   // 0.0 – 1.2 m/min
+
+  // ── Tracteur (moteur 4) — start/stop indépendant de la pompe ──
+  bool _tracteurOn = false;
+  bool _tracteurSensAvant = true; // true = avant, false = arrière
+
+  // ── Vidéo timelapse (Pi caméra, port dédié 5002) ──
+  // true dès que /video/start a été envoyé pour la passe en cours ;
+  // reste true à travers les pauses/reprises de pompe, remis à false
+  // uniquement quand la passe se termine réellement (auto ou sortie
+  // manuelle) et que la vidéo a été finalisée + partagée.
+  bool _videoRecording = false;
 
   // ── Métriques avancement (suivi chantier — ne change pas quand on fait le plein) ──
   double _metersDone  = 0;
@@ -281,7 +385,10 @@ class _PumpControlScreenState extends State<PumpControlScreen>
     final clamped = parsed.clamp(0.0, 0.8);
     setState(() => _debitCommand = clamped);
     _debitFieldCtrl.text = clamped.toStringAsFixed(2);
-    if (_isPumpOn) _sendCmd('SPEED12=${_debitToPwmPercent()}');
+    if (_isPumpOn) {
+      _sendCmd('SPEED12=${_debitToPwmPercent()}');
+      _sendCmd('DEBIT_CIBLE=${clamped.toStringAsFixed(2)}');
+    }
   }
 
   // Applique une valeur de vitesse saisie manuellement (clavier)
@@ -294,6 +401,9 @@ class _PumpControlScreenState extends State<PumpControlScreen>
     final clamped = parsed.clamp(0.0, 1.2);
     setState(() => _vitesseCommand = clamped);
     _vitesseFieldCtrl.text = clamped.toStringAsFixed(2);
+    if (_tracteurOn) {
+      _sendCmd('SPEED4=${_vitesseToPwmPercent()}');
+    }
   }
 
   void _startTimer() {
@@ -342,6 +452,11 @@ class _PumpControlScreenState extends State<PumpControlScreen>
           if (_metersLeft <= 0.001) {
             _isPumpOn = false;
             _sendCmd('SPEED12=0');
+            _sendCmd('DEBIT_CIBLE=0');
+            if (_videoRecording) {
+              _videoRecording = false;
+              _finalizeAndShareVideo();
+            }
             _timer?.cancel();
             _savePassCurve();
             _saveRealResinTotal();
@@ -391,15 +506,62 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   if (_isPumpOn) {
     // 1. On envoie l'ordre de démarrage (START)
     _sendCmd('START');
-    // 2. On envoie la vitesse juste après (si le serveur gère le délai)
+    // 2. On envoie la vitesse et la consigne de débit juste après
+    //    (si le serveur gère le délai)
     Future.delayed(const Duration(milliseconds: 100), () {
        _sendCmd('SPEED12=${_debitToPwmPercent()}');
+       _sendCmd('DEBIT_CIBLE=${_debitCommand.toStringAsFixed(2)}');
     });
+    // 3. Vidéo timelapse : démarrée une seule fois pour toute la passe.
+    //    Si l'opérateur coupe/remet la pompe plusieurs fois pendant la
+    //    même passe, l'enregistrement continue déjà, on ne relance pas.
+    if (!_videoRecording) {
+      _videoRecording = true;
+      _startVideoRecording();
+    }
   } else {
     // 1. On envoie l'ordre d'arrêt (STOP)
     _sendCmd('STOP');
   }
 }
+
+  // Démarre/arrête le tracteur (moteur 4), indépendamment du cycle de
+  // pompage. Même garde-fou de connexion que la pompe (même liaison
+  // Arduino) ; pas de contrôle de niveau résine/durcisseur, non
+  // pertinent pour le tracteur.
+  void _toggleTracteur() {
+    if (!_tracteurOn && (!_piConnected || !_arduinoConnected)) {
+      final message = !_piConnected
+          ? 'Pi injoignable — vérifie la connexion réseau.'
+          : 'Arduino déconnecté — vérifie la liaison série Pi ↔ Arduino.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text(message),
+            backgroundColor: Colors.redAccent.withOpacity(0.9)),
+      );
+      return;
+    }
+
+    setState(() => _tracteurOn = !_tracteurOn);
+    _sendCmd(_tracteurOn ? 'TRACT_ON' : 'TRACT_OFF');
+    if (_tracteurOn) {
+      // Applique la vitesse actuellement réglée sur le slider, sinon le
+      // tracteur repartirait à la vitesse par défaut de l'Arduino.
+      Future.delayed(const Duration(milliseconds: 100), () {
+        _sendCmd('SPEED4=${_vitesseToPwmPercent()}');
+      });
+    }
+  }
+
+  // Change le sens de rotation du tracteur. Volontairement bloqué tant
+  // que le tracteur tourne (_tracteurOn) : inverser le sens sous charge
+  // pourrait forcer brutalement sur la mécanique. Il faut d'abord
+  // l'arrêter.
+  void _setTracteurSens(bool avant) {
+    if (_tracteurOn || avant == _tracteurSensAvant) return;
+    setState(() => _tracteurSensAvant = avant);
+    _sendCmd(avant ? 'TRACT_SENS_AVANT' : 'TRACT_SENS_ARRIERE');
+  }
   String _fmt(double mins) {
     final m = mins.floor();
     final s = ((mins - m) * 60).round();
@@ -723,6 +885,11 @@ class _PumpControlScreenState extends State<PumpControlScreen>
     );
     if (confirm == true && mounted) {
       _sendCmd('SPEED12=0');
+      _sendCmd('DEBIT_CIBLE=0');
+      if (_videoRecording) {
+        _videoRecording = false;
+        _stopVideoRecording();
+      }
       Navigator.pop(context, false); // retour sans valider la passe
     }
   }
@@ -1281,7 +1448,146 @@ class _PumpControlScreenState extends State<PumpControlScreen>
           ),
         );
         }),
+
+        const SizedBox(height: 10),
+
+        // ── Bouton On/Off tracteur (moteur 4, indépendant de la pompe) ──
+        Builder(builder: (context) {
+          final notConnected = !_piConnected || !_arduinoConnected;
+          final startBlocked = !_tracteurOn && notConnected;
+          final blockedLabel =
+              !_piConnected ? 'Pi injoignable' : 'Arduino déconnecté';
+          return GestureDetector(
+            onTap: _toggleTracteur,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: double.infinity,
+              height: 54,
+              decoration: BoxDecoration(
+                color: startBlocked
+                    ? Colors.white.withOpacity(0.03)
+                    : (_tracteurOn
+                        ? Colors.red.withOpacity(0.15)
+                        : Colors.green.withOpacity(0.12)),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                    color: startBlocked
+                        ? Colors.white.withOpacity(0.1)
+                        : (_tracteurOn
+                            ? Colors.red.withOpacity(0.6)
+                            : Colors.green.withOpacity(0.5)),
+                    width: 1.5),
+                boxShadow: startBlocked
+                    ? []
+                    : [
+                        BoxShadow(
+                            color: (_tracteurOn ? Colors.red : Colors.green)
+                                .withOpacity(0.2),
+                            blurRadius: 12,
+                            spreadRadius: 0),
+                      ],
+              ),
+              child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                Icon(
+                  startBlocked
+                      ? Icons.lock_outline
+                      : (_tracteurOn ? Icons.stop_circle : Icons.play_circle),
+                  color: startBlocked
+                      ? Colors.grey[600]
+                      : (_tracteurOn ? Colors.redAccent : Colors.greenAccent),
+                  size: 22,
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    startBlocked
+                        ? blockedLabel
+                        : (_tracteurOn ? 'Arrêter tracteur' : 'Démarrer tracteur'),
+                    style: TextStyle(
+                      color: startBlocked
+                          ? Colors.grey[500]
+                          : (_tracteurOn ? Colors.redAccent : Colors.greenAccent),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.5),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ]),
+          ),
+        );
+        }),
+
+        const SizedBox(height: 10),
+
+        // ── Sélecteur de sens tracteur (avant/arrière) ──
+        // Désactivé tant que le tracteur tourne (voir _setTracteurSens).
+        Row(children: [
+          Expanded(
+            child: _tracteurSensButton(
+              label: 'Avant',
+              icon: Icons.arrow_upward,
+              selected: _tracteurSensAvant,
+              onTap: () => _setTracteurSens(true),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _tracteurSensButton(
+              label: 'Arrière',
+              icon: Icons.arrow_downward,
+              selected: !_tracteurSensAvant,
+              onTap: () => _setTracteurSens(false),
+            ),
+          ),
+        ]),
       ]),
+    );
+  }
+
+  // Segment de sélection du sens du tracteur (avant/arrière). Grisé et
+  // non cliquable tant que le tracteur tourne, pour éviter une inversion
+  // sous charge.
+  Widget _tracteurSensButton({
+    required String label,
+    required IconData icon,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    final disabled = _tracteurOn;
+    final color = disabled
+        ? Colors.grey[700]!
+        : (selected ? const Color(0xFFD4A574) : Colors.grey[500]!);
+    return GestureDetector(
+      onTap: disabled ? null : onTap,
+      child: Container(
+        height: 38,
+        decoration: BoxDecoration(
+          color: selected && !disabled
+              ? const Color(0xFFD4A574).withOpacity(0.12)
+              : Colors.white.withOpacity(0.03),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+              color: selected && !disabled
+                  ? const Color(0xFFD4A574).withOpacity(0.5)
+                  : Colors.white.withOpacity(0.08),
+              width: 1.2),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 15),
+            const SizedBox(width: 6),
+            Text(label,
+                style: TextStyle(
+                    color: color, fontSize: 11, fontWeight: FontWeight.w900)),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1383,7 +1689,10 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                   }
                 }),
                 onChangeEnd: (val) {
-                  if (_isPumpOn) _sendCmd('SPEED12=${_debitToPwmPercent()}');
+                  if (_isPumpOn) {
+                    _sendCmd('SPEED12=${_debitToPwmPercent()}');
+                    _sendCmd('DEBIT_CIBLE=${val.toStringAsFixed(2)}');
+                  }
                 },
               ),
             ),
@@ -1460,6 +1769,11 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                     _vitesseFieldCtrl.text = val.toStringAsFixed(2);
                   }
                 }),
+                onChangeEnd: (val) {
+                  if (_tracteurOn) {
+                    _sendCmd('SPEED4=${_vitesseToPwmPercent()}');
+                  }
+                },
               ),
             ),
           ])),

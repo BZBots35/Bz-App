@@ -388,6 +388,21 @@ class PumpService {
       'data': {'docId': docId, 'payload': payload},
     });
   }
+  
+Future<void> updateChantierEnv(String docId, String tempExt, String meteo) async {
+    final payload = {'tempExt': tempExt, 'meteo': meteo};
+    if (await _isOnline()) {
+      await _db.updateDocument(
+        databaseId: databaseId, collectionId: chantiersTable,
+        documentId: docId, data: payload);
+      return;
+    }
+    await _updateIdInCachesWithPrefix('pump_cache_chantiers_', docId, payload);
+    await _queueOp({
+      'type': 'updateChantierEnv',
+      'data': {'docId': docId, 'payload': payload},
+    });
+  }
 
   Future<void> updateChantier(String docId, {
     required String nom, required String ville,

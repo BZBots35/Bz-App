@@ -1,7 +1,9 @@
 // ignore_for_file: deprecated_member_use
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:appwrite/models.dart' as models;
+import 'package:printing/printing.dart';
 import '../services/pump_service.dart';
 import '../services/app_roles.dart';
 import '../widgets/lang_selector.dart';
@@ -9,6 +11,36 @@ import '../services/pdf_storage_service.dart';
 import 'pump_rapports_screen.dart';
 import 'pump_operation_screen.dart';
 import 'pump_pdf_service.dart';
+
+// ── Écran de lecture PDF interne ────────────────
+class RapportViewerScreen extends StatelessWidget {
+  final Uint8List pdfBytes;
+  final String title;
+
+  const RapportViewerScreen({
+    super.key,
+    required this.pdfBytes,
+    required this.title,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+        backgroundColor: Colors.black,
+        elevation: 0,
+      ),
+      body: PdfPreview(
+        build: (format) => pdfBytes,
+        allowSharing: true,
+        allowPrinting: false,
+        canChangeOrientation: false,
+        canChangePageFormat: false,
+      ),
+    );
+  }
+}
 
 class PumpChantierScreen extends StatefulWidget {
   final models.Document chantierDoc;
@@ -31,6 +63,12 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
   double _epaisseur     = 0.75;
   int    _desiredPasses = 4;
 
+  // Paramètres environnementaux du chantier
+  String _tempExt = '';
+  String _meteo   = '';
+  late TextEditingController _tempExtCtrl;
+  late TextEditingController _meteoCtrl;
+
   // Résines disponibles
   static const _resins = [
     {'id': 'spraycoat_plus', 'label': 'Spraycoat+',
@@ -44,10 +82,24 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
     super.initState();
     final d = widget.chantierDoc.data;
     _resinType     = d['resinType']     as String? ?? 'spraycoat_plus';
-    _epaisseur     = double.tryParse(
-      d['epaisseur'] as String? ?? '0.75') ?? 0.75;
+    _epaisseur     = double.tryParse(d['epaisseur'] as String? ?? '0.75') ?? 0.75;
     _desiredPasses = d['desiredPasses'] as int? ?? 4;
+    
+    // Récupération des données environnementales si elles existent dans Appwrite
+    _tempExt       = d['tempExt'] as String? ?? '';
+    _meteo         = d['meteo'] as String? ?? '';
+
+    _tempExtCtrl   = TextEditingController(text: _tempExt);
+    _meteoCtrl     = TextEditingController(text: _meteo);
+
     _loadCanalisations();
+  }
+
+  @override
+  void dispose() {
+    _tempExtCtrl.dispose();
+    _meteoCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _loadCanalisations() async {
@@ -116,8 +168,6 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
             behavior: SnackBarBehavior.floating));
       }
     } catch (e) {
-      // Erreur rendue visible au lieu de disparaître silencieusement —
-      // le message exact (permission, schéma, réseau...) s'affiche ici.
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text('Erreur lors de la création : $e'),
@@ -131,10 +181,20 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
   }
 
   Future<void> _saveParams() async {
+    // On met à jour les paramètres de base + les nouvelles données environnementales
     await _service.updateChantierParams(
       widget.chantierDoc.$id, _resinType,
       _epaisseur.toStringAsFixed(2), _desiredPasses);
-    // Mettre à jour les passes de toutes les canalisations
+      
+    // Sauvegarde additionnelle des champs environnementaux dans Appwrite
+    try {
+      await _service.updateChantierEnv(
+        widget.chantierDoc.$id, _tempExtCtrl.text.trim(), _meteoCtrl.text.trim());
+    } catch (_) {
+      // Si la méthode updateChantierEnv n'existe pas encore dans ton PumpService, 
+      // tu pourras l'ajouter ou t'assurer qu'elle met à jour les attributs tempExt et meteo.
+    }
+
     for (final c in _canalisations) {
       if (c.data['statut'] != 'termine') {
         await _service.updateCanalisation(c.$id, passes: _desiredPasses);
@@ -162,7 +222,15 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
       final nomCh    = widget.chantierDoc.data['nom'] as String? ?? 'chantier';
       final filename = 'Rapport_${nomCh}_${DateTime.now().millisecondsSinceEpoch}';
       await storage.savePdf(bytes, filename);
-      await pdfSvc.sharePdf(bytes, filename);
+      
+      if (mounted) {
+        Navigator.push(context, MaterialPageRoute(
+          builder: (_) => RapportViewerScreen(
+            pdfBytes: bytes,
+            title: 'Rapport Global',
+          ),
+        ));
+      }
     } catch (e) {
       if (mounted) {
         Navigator.pop(context);
@@ -208,7 +276,6 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
         ],
       ),
       body: Column(children: [
-        // ── Infos chantier ──────────────────────
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
@@ -229,9 +296,12 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
               style: TextStyle(color: Colors.grey[700], fontSize: 10)),
           ]),
         ),
-
-        // ── Paramètres globaux ──────────────────
+        
+        // ── Panneau paramètres globaux ────────────────
         _buildParamsPanel(),
+
+        // ── Nouveau Panneau : Conditions Environnementales ──
+        _buildEnvPanel(),
 
         // ── Tableau dimensionnement ─────────────
         _buildTableHeader(),
@@ -281,7 +351,6 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
     );
   }
 
-  // ── Panneau paramètres globaux ────────────────
   Widget _buildParamsPanel() {
     final resin   = _resins.firstWhere((r) => r['id'] == _resinType,
       orElse: () => _resins[0]);
@@ -297,9 +366,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
         border: Border(bottom: BorderSide(
           color: Colors.white.withOpacity(0.06)))),
       child: Column(children: [
-        // Row 1: Résine + Épaisseur
         Row(children: [
-          // Type résine
           Expanded(child: Column(
             crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('TYPE RÉSINE', style: TextStyle(
@@ -338,15 +405,13 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
             ),
           ])),
           const SizedBox(width: 12),
-          // Épaisseur/passe
           Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
             Text('ÉP./PASSE', style: TextStyle(
               color: Colors.grey[500], fontSize: 8,
               fontWeight: FontWeight.w900, letterSpacing: 1.5)),
             const SizedBox(height: 4),
             Row(children: [
-              _paramBox('${epRec.toStringAsFixed(2)}', Colors.grey,
-                'Rec.'),
+              _paramBox('${epRec.toStringAsFixed(2)}', Colors.grey, 'Rec.'),
               const SizedBox(width: 6),
               _epaisseurInput(epMin, epMax, isWarn),
             ]),
@@ -356,7 +421,6 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
                   fontSize: 8, fontWeight: FontWeight.w700)),
           ]),
           const SizedBox(width: 12),
-          // Cycle passes
           Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
             Text('PASSES', style: TextStyle(
               color: Colors.grey[500], fontSize: 8,
@@ -369,6 +433,64 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
             ]),
           ]),
         ]),
+      ]),
+    );
+  }
+
+  // ── Panneau de saisie Environnement / Météo ──
+  Widget _buildEnvPanel() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0A0A0F),
+        border: Border(bottom: BorderSide(color: Colors.white.withOpacity(0.06))),
+      ),
+      child: Row(children: [
+        const Icon(Icons.thermostat, color: Color(0xFF22D3EE), size: 16),
+        const SizedBox(width: 8),
+        Text('ENVIRONNEMENT', style: TextStyle(color: Colors.grey[400], fontSize: 8, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
+        const SizedBox(width: 12),
+        // Champ Température Extérieure
+        Expanded(
+          child: SizedBox(
+            height: 34,
+            child: TextField(
+              controller: _tempExtCtrl,
+              style: const TextStyle(color: Colors.white, fontSize: 11),
+              decoration: InputDecoration(
+                hintText: 'Temp. Ext (ex: 21°C)',
+                hintStyle: TextStyle(color: Colors.grey[600], fontSize: 10),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                filled: true,
+                fillColor: Colors.black.withOpacity(0.4),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
+              ),
+              onSubmitted: (_) => _saveParams(),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        // Champ Météo / Conditions
+        Expanded(
+          child: SizedBox(
+            height: 34,
+            child: TextField(
+              controller: _meteoCtrl,
+              style: const TextStyle(color: Colors.white, fontSize: 11),
+              decoration: InputDecoration(
+                hintText: 'Météo (ex: Sec, Ensoleillé)',
+                hintStyle: TextStyle(color: Colors.grey[600], fontSize: 10),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                filled: true,
+                fillColor: Colors.black.withOpacity(0.4),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
+              ),
+              onSubmitted: (_) => _saveParams(),
+            ),
+          ),
+        ),
       ]),
     );
   }
@@ -455,7 +577,6 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
     );
   }
 
-  // ── Header tableau ────────────────────────────
   Widget _buildTableHeader() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -474,7 +595,6 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
     );
   }
 
-  // ── Tableau canalisations ─────────────────────
   Widget _buildTable() {
     return DataTable(
       headingRowColor: WidgetStateProperty.all(const Color(0xFF0D0D0D)),
@@ -521,26 +641,20 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
     final isDone = statut == 'termine';
 
     return DataRow(cells: [
-      // #
       DataCell(Text('${idx + 1}', style: TextStyle(
         color: Colors.grey[600], fontSize: 11))),
-      // Libellé
       DataCell(SizedBox(width: 100, child: Text(label,
         style: const TextStyle(color: Colors.white,
           fontSize: 12, fontWeight: FontWeight.w700),
         overflow: TextOverflow.ellipsis))),
-      // Longueur
       DataCell(Text(lonStr, style: TextStyle(
         color: Colors.grey[400], fontSize: 11))),
-      // Diamètre
       DataCell(Text('DN$diaStr', style: TextStyle(
         color: Colors.grey[400], fontSize: 11))),
-      // Passes
       DataCell(Text('$passes', style: TextStyle(
         color: passes != _desiredPasses
           ? Colors.red : Colors.white,
         fontSize: 12, fontWeight: FontWeight.w700))),
-      // Résine
       DataCell(Column(
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -550,7 +664,6 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
         Text('A:${partA.toStringAsFixed(2)} B:${partB.toStringAsFixed(2)}',
           style: TextStyle(color: Colors.grey[600], fontSize: 8)),
       ])),
-      // Action
       DataCell(isDone
         ? Column(mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -612,7 +725,6 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
     ]);
   }
 
-  // ── Totaux ─────────────────────────────────────
   Widget _buildTotaux() {
     final totalLin  = _totalLinear;
     final totalRes  = _totalResin;
@@ -693,8 +805,17 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
         calcResin:    (lon, dia, pas) => _calcResin(lon, dia, pas),
       );
       if (mounted) Navigator.pop(context);
+      
       final label = doc.data['label'] as String? ?? 'canal_${idx+1}';
-      await PumpPdfService().sharePdf(bytes, 'Rapport_$label');
+      
+      if (mounted) {
+        Navigator.push(context, MaterialPageRoute(
+          builder: (_) => RapportViewerScreen(
+            pdfBytes: bytes,
+            title: 'Rapport $label',
+          ),
+        ));
+      }
     } catch (e) {
       if (mounted) {
         Navigator.pop(context);
@@ -706,7 +827,6 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
   }
 }
 
-// ── Formulaire ajout canalisation ────────────────
 class _AddCanalisationSheet extends StatefulWidget {
   final int defaultPasses;
   const _AddCanalisationSheet({required this.defaultPasses});
@@ -747,7 +867,6 @@ class _AddCanalisationSheetState extends State<_AddCanalisationSheet> {
             Icons.circle_outlined)),
         ]),
         const SizedBox(height: 10),
-        // Passes
         Row(children: [
           Text('Passes : ', style: TextStyle(
             color: Colors.grey[400], fontSize: 12)),

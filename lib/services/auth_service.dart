@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:appwrite/appwrite.dart';
 import 'package:appwrite/models.dart' as models;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -223,6 +224,52 @@ class AuthService {
   // ─────────────────────────────────────────────
   // VALIDATION DE COMPTE
   // ─────────────────────────────────────────────
+  //
+  // Ces trois méthodes n'écrivent plus DIRECTEMENT dans la base :
+  // elles passent par la Function serveur `manage-roles`, qui revérifie
+  // les droits de l'appelant côté serveur avant d'appliquer le changement.
+  // La collection `users_roles` a été verrouillée en écriture (plus de
+  // permission "Any"/"Users") : ces méthodes ne fonctionneront plus si
+  // ce verrouillage n'est pas fait, c'est voulu.
+
+  /// Lève une exception avec le message renvoyé par la Function en cas de refus.
+  Future<Map<String, dynamic>> _callManageRoles(Map<String, dynamic> body) async {
+    final functions = Functions(_client);
+    final execution = await functions.createExecution(
+      functionId: '6a758a000003db8d152f',
+      body: jsonEncode(body),
+    );
+
+    final Map<String, dynamic> result =
+        jsonDecode(execution.responseBody) as Map<String, dynamic>;
+
+    if (result['success'] != true) {
+      throw Exception(result['message'] ?? 'Action refusée par le serveur.');
+    }
+    return result;
+  }
+
+  /// Même Function que _callManageRoles, mais pour les actions de LECTURE
+  /// scopées par rôle (un employé ne voit que sa propre entreprise, etc.).
+  /// En cas de refus (403/autre), retourne une liste/valeur vide plutôt que
+  /// de lever une exception, pour ne pas casser les écrans qui listent
+  /// simplement des données (comportement identique à l'ancien code qui
+  /// avalait déjà les erreurs avec try/catch silencieux).
+  Future<dynamic> _callListRoles(Map<String, dynamic> body) async {
+    try {
+      final functions = Functions(_client);
+      final execution = await functions.createExecution(
+        functionId: '6a758a000003db8d152f',
+        body: jsonEncode(body),
+      );
+      final Map<String, dynamic> result =
+          jsonDecode(execution.responseBody) as Map<String, dynamic>;
+      if (result['success'] != true) return null;
+      return result['data'];
+    } catch (e) {
+      return null;
+    }
+  }
 
   Future<void> validerCompte({
     required String documentId,
@@ -230,15 +277,11 @@ class AuthService {
     required String userName,
     required List<String> products,
   }) async {
-    await _db.updateDocument(
-      databaseId  : databaseId,
-      collectionId: rolesTable,
-      documentId  : documentId,
-      data        : {
-        'status'  : AppRoles.statusActive,
-        'products': products.join(','),
-      },
-    );
+    await _callManageRoles({
+      'action'          : 'validerCompte',
+      'targetDocumentId': documentId,
+      'products'        : products,
+    });
 
     await _sendConfirmationEmail(
       userEmail : userEmail,
@@ -248,12 +291,10 @@ class AuthService {
   }
 
   Future<void> suspendreCompte(String documentId) async {
-    await _db.updateDocument(
-      databaseId  : databaseId,
-      collectionId: rolesTable,
-      documentId  : documentId,
-      data        : {'status': AppRoles.statusSuspended},
-    );
+    await _callManageRoles({
+      'action'          : 'suspendreCompte',
+      'targetDocumentId': documentId,
+    });
   }
 
   // ─────────────────────────────────────────────
@@ -261,125 +302,76 @@ class AuthService {
   // ─────────────────────────────────────────────
 
   Future<String> getUserRole(String userId) async {
-    try {
-      final result = await _db.listDocuments(
-        databaseId  : databaseId,
-        collectionId: rolesTable,
-        queries     : [Query.equal('userID', userId)],
-      ).timeout(const Duration(seconds: 4));
-      if (result.documents.isNotEmpty) {
-        return result.documents.first.data['role'] ?? AppRoles.entreprise;
-      }
-    } catch (e) { /* ignore */ }
+    final data = await _callListRoles({'action': 'getUserRoleData', 'userId': userId});
+    if (data is Map) return data['role'] ?? AppRoles.entreprise;
     return AppRoles.entreprise;
   }
 
   Future<String> getUserStatus(String userId) async {
-    try {
-      final result = await _db.listDocuments(
-        databaseId  : databaseId,
-        collectionId: rolesTable,
-        queries     : [Query.equal('userID', userId)],
-      );
-      if (result.documents.isNotEmpty) {
-        return result.documents.first.data['status'] ?? AppRoles.statusPending;
-      }
-    } catch (e) { /* ignore */ }
+    final data = await _callListRoles({'action': 'getUserRoleData', 'userId': userId});
+    if (data is Map) return data['status'] ?? AppRoles.statusPending;
     return AppRoles.statusPending;
   }
 
   Future<Map<String, dynamic>?> getUserRoleData(String userId) async {
-    try {
-      final result = await _db.listDocuments(
-        databaseId  : databaseId,
-        collectionId: rolesTable,
-        queries     : [Query.equal('userID', userId)],
-      );
-      if (result.documents.isNotEmpty) {
-        return result.documents.first.data;
-      }
-    } catch (e) { /* ignore */ }
+    final data = await _callListRoles({'action': 'getUserRoleData', 'userId': userId});
+    if (data is Map<String, dynamic>) return data;
     return null;
   }
 
   Future<List<models.Document>> getPendingComptes({
     String? distributorId,
   }) async {
-    try {
-      final queries = [Query.equal('status', AppRoles.statusPending)];
-      if (distributorId != null && distributorId.isNotEmpty) {
-        queries.add(Query.equal('distributor_id', distributorId));
-      }
-      final result = await _db.listDocuments(
-        databaseId  : databaseId,
-        collectionId: rolesTable,
-        queries     : queries,
-      );
-      return result.documents;
-    } catch (e) {
-      return [];
+    final data = await _callListRoles({
+      'action': 'listPending',
+      if (distributorId != null && distributorId.isNotEmpty) 'distributorId': distributorId,
+    });
+    if (data is List) {
+      return data.map((e) => models.Document.fromMap(e as Map<String, dynamic>)).toList();
     }
+    return [];
   }
 
   Future<List<models.Document>> getEntreprisesByDistributeur(
     String distributorId,
   ) async {
-    try {
-      final result = await _db.listDocuments(
-        databaseId  : databaseId,
-        collectionId: rolesTable,
-        queries     : [
-          Query.equal('distributor_id', distributorId),
-          Query.equal('role', AppRoles.entreprise),
-        ],
-      );
-      return result.documents;
-    } catch (e) {
-      return [];
+    final data = await _callListRoles({
+      'action': 'listEntreprisesByDistributeur',
+      'distributorId': distributorId,
+    });
+    if (data is List) {
+      return data.map((e) => models.Document.fromMap(e as Map<String, dynamic>)).toList();
     }
+    return [];
   }
 
   Future<List<models.Document>> getEmployesByEntreprise(
     String companyId,
   ) async {
-    try {
-      final result = await _db.listDocuments(
-        databaseId  : databaseId,
-        collectionId: rolesTable,
-        queries     : [
-          Query.equal('company_id', companyId),
-          Query.equal('role', AppRoles.employe),
-        ],
-      );
-      return result.documents;
-    } catch (e) {
-      return [];
+    final data = await _callListRoles({
+      'action': 'listEmployesByEntreprise',
+      'companyId': companyId,
+    });
+    if (data is List) {
+      return data.map((e) => models.Document.fromMap(e as Map<String, dynamic>)).toList();
     }
+    return [];
   }
 
   Future<List<models.Document>> getAllUsersRoles() async {
-    try {
-      final result = await _db.listDocuments(
-        databaseId  : databaseId,
-        collectionId: rolesTable,
-      );
-      return result.documents;
-    } catch (e) {
-      return [];
+    final data = await _callListRoles({'action': 'listAll'});
+    if (data is List) {
+      return data.map((e) => models.Document.fromMap(e as Map<String, dynamic>)).toList();
     }
+    return [];
   }
 
   Future<List<models.Document>> getDistributeurs() async {
-    try {
-      final result = await _db.listDocuments(
-        databaseId  : databaseId,
-        collectionId: rolesTable,
-        queries     : [Query.equal('role', AppRoles.distributeur)],
-      );
-      return result.documents;
-    } catch (e) {
-      return [];
+    final data = await _callListRoles({'action': 'listDistributeurs'});
+    if (data is List) {
+      return data.map((e) => models.Document.fromMap(e as Map<String, dynamic>)).toList();
     }
+    return [];
   }
 
   // ── Trouve le distributeur par pays, fallback Picote ──────────────────────
@@ -452,12 +444,11 @@ class AuthService {
   // ─────────────────────────────────────────────
 
   Future<void> updateRole(String documentId, String newRole) async {
-    await _db.updateDocument(
-      databaseId  : databaseId,
-      collectionId: rolesTable,
-      documentId  : documentId,
-      data        : {'role': newRole},
-    );
+    await _callManageRoles({
+      'action'          : 'updateRole',
+      'targetDocumentId': documentId,
+      'newRole'         : newRole,
+    });
   }
 
   Future<void> updateUserProducts(
@@ -482,17 +473,11 @@ class AuthService {
   }
 
   Future<List<String>> getUserProducts(String userId) async {
-    try {
-      final result = await _db.listDocuments(
-        databaseId  : databaseId,
-        collectionId: rolesTable,
-        queries     : [Query.equal('userID', userId)],
-      );
-      if (result.documents.isNotEmpty) {
-        final p = result.documents.first.data['products'] as String? ?? '';
-        return p.isEmpty ? [] : p.split(',');
-      }
-    } catch (e) { /* ignore */ }
+    final data = await _callListRoles({'action': 'getUserRoleData', 'userId': userId});
+    if (data is Map) {
+      final p = data['products'] as String? ?? '';
+      return p.isEmpty ? [] : p.split(',');
+    }
     return [];
   }
 
@@ -527,16 +512,8 @@ class AuthService {
   }
 
   Future<String> getUserCompany(String userId) async {
-    try {
-      final result = await _db.listDocuments(
-        databaseId  : databaseId,
-        collectionId: rolesTable,
-        queries     : [Query.equal('userID', userId)],
-      );
-      if (result.documents.isNotEmpty) {
-        return result.documents.first.data['company'] ?? '';
-      }
-    } catch (e) { /* ignore */ }
+    final data = await _callListRoles({'action': 'getUserRoleData', 'userId': userId});
+    if (data is Map) return data['company'] ?? '';
     return '';
   }
 
