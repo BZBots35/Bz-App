@@ -47,6 +47,13 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   final _lang = LangService();
   final _pumpService = PumpService();
 
+  // Débit max réglable (slider + champ texte + calcul PWM) — une seule
+  // source de vérité, à changer ici si jamais la plage doit évoluer.
+  static const double _debitMax = 0.8; // L/min
+
+  // Vitesse tracteur max réglable — même principe.
+  static const double _vitesseMax = 3; // m/min
+
   // ── Connexion Pi ──────────────────────────────
   bool _piConnected = false;
 
@@ -149,17 +156,18 @@ class _PumpControlScreenState extends State<PumpControlScreen>
     }
   }
 
-  // Convertit le débit commandé (0 – 0.8 L/min) en pourcentage PWM (0 – 100)
+  // Convertit le débit commandé (0 – _debitMax L/min) en pourcentage PWM
+  // (0 – 100)
   // À ajuster si la correspondance réelle débit/PWM du moteur diffère.
   int _debitToPwmPercent() {
-    return ((_debitCommand / 0.8) * 100).round().clamp(0, 100);
+    return ((_debitCommand / _debitMax) * 100).round().clamp(0, 100);
   }
 
-  // Convertit la vitesse tracteur commandée (0 – 1.2 m/min) en pourcentage
-  // PWM (0 – 100) pour SPEED4. À ajuster si la correspondance réelle
-  // vitesse/PWM du moteur diffère.
+  // Convertit la vitesse tracteur commandée (0 – _vitesseMax m/min) en
+  // pourcentage PWM (0 – 100) pour SPEED4. À ajuster si la correspondance
+  // réelle vitesse/PWM du moteur diffère.
   int _vitesseToPwmPercent() {
-    return ((_vitesseCommand / 1.2) * 100).round().clamp(0, 100);
+    return ((_vitesseCommand / _vitesseMax) * 100).round().clamp(0, 100);
   }
 
   Future<void> _checkPiConnection() async {
@@ -258,8 +266,8 @@ class _PumpControlScreenState extends State<PumpControlScreen>
 
   // ── Commandes opérateur ───────────────────────
   bool   _isPumpOn       = false;
-  double _debitCommand   = 0.0;   // 0.0 – 0.8 L/min
-  double _vitesseCommand = 0.0;   // 0.0 – 1.2 m/min
+  double _debitCommand   = 0.0;   // 0.0 – _debitMax L/min
+  double _vitesseCommand = 0.0;   // 0.0 – _vitesseMax m/min
 
   // ── Tracteur (moteur 4) — start/stop indépendant de la pompe ──
   bool _tracteurOn = false;
@@ -318,6 +326,13 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   final _random = math.Random();
   Timer? _timer;
   Timer? _telemetryTimer;
+  // Debounce d'envoi pour les sliders débit/vitesse — indépendant de
+  // onChangeEnd (peu fiable sur cet écran à cause des reconstructions
+  // fréquentes du widget tree via la télémétrie toutes les secondes).
+  // Se déclenche ~400ms après le dernier mouvement du slider, que le
+  // relâchement ait été détecté proprement ou non.
+  Timer? _debitSendDebounce;
+  Timer? _vitesseSendDebounce;
   late AnimationController _heroAnimController;
 
   final TextEditingController _debitFieldCtrl = TextEditingController();
@@ -367,6 +382,8 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   void dispose() {
     _timer?.cancel();
     _telemetryTimer?.cancel();
+    _debitSendDebounce?.cancel();
+    _vitesseSendDebounce?.cancel();
     _debitFieldCtrl.dispose();
     _vitesseFieldCtrl.dispose();
     _debitFocus.dispose();
@@ -382,7 +399,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
       _debitFieldCtrl.text = _debitCommand.toStringAsFixed(2);
       return;
     }
-    final clamped = parsed.clamp(0.0, 0.8);
+    final clamped = parsed.clamp(0.0, _debitMax);
     setState(() => _debitCommand = clamped);
     _debitFieldCtrl.text = clamped.toStringAsFixed(2);
     if (_isPumpOn) {
@@ -398,7 +415,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
       _vitesseFieldCtrl.text = _vitesseCommand.toStringAsFixed(2);
       return;
     }
-    final clamped = parsed.clamp(0.0, 1.2);
+    final clamped = parsed.clamp(0.0, _vitesseMax);
     setState(() => _vitesseCommand = clamped);
     _vitesseFieldCtrl.text = clamped.toStringAsFixed(2);
     if (_tracteurOn) {
@@ -412,7 +429,24 @@ class _PumpControlScreenState extends State<PumpControlScreen>
       setState(() {
         // Note : toutes les valeurs de télémétrie (charges, débit, températures,
         // niveaux) viennent désormais de _fetchTelemetry() en temps réel.
-        // Ce timer ne gère plus que l'avancement du tracteur.
+
+        // ── Conso résine + niveau des cuves — basé sur le débit RÉEL ──
+        // Indépendant du mouvement du tracteur : si la pompe distribue de
+        // la résine (débit mesuré > 0), les cuves descendent à ce rythme,
+        // même si le tracteur n'avance pas (ex: pompe démarrée seule,
+        // tracteur pas encore lancé ou temporairement arrêté).
+        if (_isPumpOn && _debitReel > 0) {
+          _resinConso += _debitReel / 60;
+          _resinAppliedThisPass += _debitReel / 60;
+
+          final volumeDeltaMixed = _debitReel / 60; // L consommés cette seconde
+          _resineTankRatio = (_resineTankRatio -
+                  (volumeDeltaMixed * _ratioResine) / _resineCapaciteL)
+              .clamp(0.0, 1.0);
+          _durcisseurTankRatio = (_durcisseurTankRatio -
+                  (volumeDeltaMixed * _ratioDurcisseur) / _durcisseurCapaciteL)
+              .clamp(0.0, 1.0);
+        }
 
         // ── Avancement tracteur — basé sur la vitesse RÉELLE mesurée ──
         // (pas la consigne : si la pompe n'avance pas vraiment à la
@@ -422,20 +456,6 @@ class _PumpControlScreenState extends State<PumpControlScreen>
           _metersDone += delta;
           _metersLeft  = (widget.longueur - _metersDone).clamp(0, widget.longueur);
           _timeElapsed += 1 / 60;
-          // Conso résine = accumulation du débit RÉEL mesuré (pas la
-          // consigne, pas une formule théorique sur l'épaisseur cible).
-          _resinConso += _debitReel / 60;
-          _resinAppliedThisPass += _debitReel / 60;
-
-          // ── Niveau des cuves : déplétion indépendante (ratio 2:1) ──
-          final volumeDeltaMixed =
-              delta * (math.pi * widget.diametre * widget.epaisseur / 1000);
-          _resineTankRatio = (_resineTankRatio -
-                  (volumeDeltaMixed * _ratioResine) / _resineCapaciteL)
-              .clamp(0.0, 1.0);
-          _durcisseurTankRatio = (_durcisseurTankRatio -
-                  (volumeDeltaMixed * _ratioDurcisseur) / _durcisseurCapaciteL)
-              .clamp(0.0, 1.0);
 
           // ── Échantillon pour la courbe épaisseur/métrage ──
           // Basé sur les mesures RÉELLES (débit et vitesse mesurés), pas
@@ -1624,7 +1644,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
             const SizedBox(height: 4),
             SpeedometerGauge(
               currentSpeed: _debitReel,
-              maxSpeed: 0.8,
+              maxSpeed: _debitMax,
               unit: 'L/min',
               color: const Color(0xFF60A5FA),
               size: 130,
@@ -1678,8 +1698,8 @@ class _PumpControlScreenState extends State<PumpControlScreen>
               child: Slider(
                 value: _debitCommand,
                 min: 0.0,
-                max: 0.8,
-                divisions: 80,
+                max: _debitMax,
+                divisions: (_debitMax * 100).round(),
                 activeColor: const Color(0xFF60A5FA),
                 inactiveColor: Colors.grey[800],
                 onChanged: (val) => setState(() {
@@ -1687,8 +1707,20 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                   if (!_debitFocus.hasFocus) {
                     _debitFieldCtrl.text = val.toStringAsFixed(2);
                   }
+                  // Debounce : envoie ~400ms après le dernier mouvement,
+                  // sans dépendre de onChangeEnd (peu fiable ici).
+                  _debitSendDebounce?.cancel();
+                  _debitSendDebounce = Timer(const Duration(milliseconds: 400), () {
+                    if (_isPumpOn) {
+                      _sendCmd('SPEED12=${_debitToPwmPercent()}');
+                      _sendCmd('DEBIT_CIBLE=${_debitCommand.toStringAsFixed(2)}');
+                    }
+                  });
                 }),
                 onChangeEnd: (val) {
+                  // Filet de sécurité si onChangeEnd se déclenche bien —
+                  // annule le debounce en attente pour éviter un double envoi.
+                  _debitSendDebounce?.cancel();
                   if (_isPumpOn) {
                     _sendCmd('SPEED12=${_debitToPwmPercent()}');
                     _sendCmd('DEBIT_CIBLE=${val.toStringAsFixed(2)}');
@@ -1709,7 +1741,8 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                     fontWeight: FontWeight.w800,
                     letterSpacing: 1.2)),
             const SizedBox(height: 4),
-            SpeedometerGauge(currentSpeed: _vitesse4Reel, size: 130),
+            SpeedometerGauge(
+                currentSpeed: _vitesse4Reel, maxSpeed: _vitesseMax, size: 130),
             const SizedBox(height: 10),
             Divider(color: Colors.white.withOpacity(0.08), height: 1),
             const SizedBox(height: 10),
@@ -1759,8 +1792,8 @@ class _PumpControlScreenState extends State<PumpControlScreen>
               child: Slider(
                 value: _vitesseCommand,
                 min: 0.0,
-                max: 1.2,
-                divisions: 120,
+                max: _vitesseMax,
+                divisions: (_vitesseMax * 100).round(),
                 activeColor: const Color(0xFFD4A574),
                 inactiveColor: Colors.grey[800],
                 onChanged: (val) => setState(() {
@@ -1768,8 +1801,17 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                   if (!_vitesseFocus.hasFocus) {
                     _vitesseFieldCtrl.text = val.toStringAsFixed(2);
                   }
+                  // Debounce : envoie ~400ms après le dernier mouvement,
+                  // sans dépendre de onChangeEnd (peu fiable ici).
+                  _vitesseSendDebounce?.cancel();
+                  _vitesseSendDebounce = Timer(const Duration(milliseconds: 400), () {
+                    if (_tracteurOn) {
+                      _sendCmd('SPEED4=${_vitesseToPwmPercent()}');
+                    }
+                  });
                 }),
                 onChangeEnd: (val) {
+                  _vitesseSendDebounce?.cancel();
                   if (_tracteurOn) {
                     _sendCmd('SPEED4=${_vitesseToPwmPercent()}');
                   }
