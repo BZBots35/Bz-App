@@ -149,7 +149,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
 
       await Share.shareXFiles(
         [XFile(file.path)],
-        text: 'Vidéo timelapse de la passe',
+        text: _lang.t('pumpVideoShareText'),
       );
     } catch (e) {
       print("Erreur récupération/partage vidéo : $e");
@@ -493,8 +493,8 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   // toujours possible, au cas où on aurait besoin de couper malgré tout.)
   if (!_isPumpOn && (!_piConnected || !_arduinoConnected)) {
     final message = !_piConnected
-        ? 'Pi injoignable — vérifie la connexion réseau.'
-        : 'Arduino déconnecté — vérifie la liaison série Pi ↔ Arduino.';
+        ? _lang.t('pumpPiUnreachableMsg')
+        : _lang.t('pumpArduinoDisconnectedMsg');
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
           content: Text(message),
@@ -509,10 +509,10 @@ class _PumpControlScreenState extends State<PumpControlScreen>
     final resineLow = !_niveauResineOk;
     final durcisseurLow = !_niveauDurcisseurOk;
     final message = resineLow && durcisseurLow
-        ? 'Niveaux résine et durcisseur bas — remplis avant de démarrer.'
+        ? _lang.t('pumpLevelLowResinDurcisseurMsg')
         : resineLow
-            ? 'Niveau résine bas — remplis avant de démarrer.'
-            : 'Niveau durcisseur bas — remplis avant de démarrer.';
+            ? _lang.t('pumpLevelLowResinMsg')
+            : _lang.t('pumpLevelLowDurcisseurMsg');
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
           content: Text(message),
@@ -552,8 +552,8 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   void _toggleTracteur() {
     if (!_tracteurOn && (!_piConnected || !_arduinoConnected)) {
       final message = !_piConnected
-          ? 'Pi injoignable — vérifie la connexion réseau.'
-          : 'Arduino déconnecté — vérifie la liaison série Pi ↔ Arduino.';
+          ? _lang.t('pumpPiUnreachableMsg')
+          : _lang.t('pumpArduinoDisconnectedMsg');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
             content: Text(message),
@@ -744,7 +744,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
               ),
               const SizedBox(height: 16),
               if (hasData) ...[
-                Text('ÉPAISSEUR APPLIQUÉE / MÉTRAGE',
+                Text(_lang.t('pumpChartTitle'),
                     style: TextStyle(
                         color: Colors.grey[500],
                         fontSize: 8,
@@ -801,7 +801,8 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                               show: true,
                               alignment: Alignment.topRight,
                               style: TextStyle(color: Colors.grey[400], fontSize: 8),
-                              labelResolver: (line) => 'Cible ${targetEpaisseur.toStringAsFixed(1)}mm'),
+                              labelResolver: (line) =>
+                                  '${_lang.t('pumpChartTargetPrefix')}${targetEpaisseur.toStringAsFixed(1)}mm'),
                         ),
                       ]),
                       lineTouchData: LineTouchData(
@@ -837,7 +838,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
               ] else
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Text('Pas assez de données mesurées pour tracer la courbe.',
+                  child: Text(_lang.t('pumpChartNotEnoughData'),
                       style: TextStyle(color: Colors.grey[600], fontSize: 11)),
                 ),
             ]),
@@ -952,10 +953,10 @@ class _PumpControlScreenState extends State<PumpControlScreen>
           final resineLow = !_niveauResineOk;
           final durcisseurLow = !_niveauDurcisseurOk;
           final message = resineLow && durcisseurLow
-              ? 'Les niveaux de résine ET de durcisseur sont bas.'
+              ? _lang.t('pumpLowLevelBothMsg')
               : resineLow
-                  ? 'Le niveau de résine est bas.'
-                  : 'Le niveau de durcisseur est bas.';
+                  ? _lang.t('pumpLowLevelResinMsg')
+                  : _lang.t('pumpLowLevelDurcisseurMsg');
 
           return AlertDialog(
             backgroundColor: const Color(0xFF0D0D0D),
@@ -965,22 +966,22 @@ class _PumpControlScreenState extends State<PumpControlScreen>
             title: Row(children: [
               const Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 22),
               const SizedBox(width: 8),
-              const Text('Niveau bas',
-                  style: TextStyle(
+              Text(_lang.t('pumpLevelLowLabel'),
+                  style: const TextStyle(
                       color: Colors.white, fontWeight: FontWeight.w900, fontSize: 14)),
             ]),
             content: Column(mainAxisSize: MainAxisSize.min, children: [
               Text(message,
                   style: TextStyle(color: Colors.grey[400], fontSize: 12, height: 1.5)),
               const SizedBox(height: 4),
-              Text('Remplis les réservoirs maintenant.',
+              Text(_lang.t('pumpLowLevelFillNowMsg'),
                   style: TextStyle(color: Colors.grey[400], fontSize: 12, height: 1.5)),
               const SizedBox(height: 18),
               Text('$secondsLeft s',
                   style: const TextStyle(
                       color: Colors.redAccent, fontSize: 36, fontWeight: FontWeight.w900)),
               const SizedBox(height: 4),
-              Text('avant arrêt automatique de la pompe',
+              Text(_lang.t('pumpLowLevelCountdownSuffix'),
                   style: TextStyle(color: Colors.grey[500], fontSize: 10)),
             ]),
             actions: [
@@ -997,8 +998,8 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10))),
-                child: const Text('Arrêter maintenant',
-                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11)),
+                child: Text(_lang.t('pumpStopNowBtn'),
+                    style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11)),
               ),
             ],
           );
@@ -1022,18 +1023,18 @@ class _PumpControlScreenState extends State<PumpControlScreen>
         title: Row(children: [
           const Icon(Icons.local_gas_station_outlined, color: Colors.greenAccent, size: 20),
           const SizedBox(width: 8),
-          Text('Plein $label',
+          Text('${_lang.t('pumpRefillTitlePrefix')}$label',
               style: const TextStyle(
                   color: Colors.white, fontWeight: FontWeight.w900, fontSize: 13)),
         ]),
         content: Text(
-          'Confirmer que le fût de $label vient d\'être rempli ?',
+          '${_lang.t('pumpRefillConfirmPrefix')}$label${_lang.t('pumpRefillConfirmSuffix')}',
           style: TextStyle(color: Colors.grey[400], fontSize: 12, height: 1.5),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: Text('Annuler', style: TextStyle(color: Colors.grey[400]))),
+              child: Text(_lang.t('cancel'), style: TextStyle(color: Colors.grey[400]))),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             style: ElevatedButton.styleFrom(
@@ -1041,8 +1042,8 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10))),
-            child: const Text('Confirmer',
-                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11)),
+            child: Text(_lang.t('confirm'),
+                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11)),
           ),
         ],
       ),
@@ -1228,7 +1229,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                       color: _isPumpOn ? const Color(0xFF22D3EE) : Colors.grey[700],
                       shape: BoxShape.circle)),
               const SizedBox(width: 5),
-              Text(_isPumpOn ? 'EN COURS' : 'À L\'ARRÊT',
+              Text(_isPumpOn ? _lang.t('statusInProgress') : _lang.t('pumpStatusStoppedLabel'),
                   style: TextStyle(
                       color: _isPumpOn ? const Color(0xFF22D3EE) : Colors.grey[600],
                       fontSize: 8,
@@ -1325,8 +1326,8 @@ class _PumpControlScreenState extends State<PumpControlScreen>
           // ── Phrase-état, lisible d'un coup d'œil ──
           Text(
               _isPumpOn
-                  ? 'En cours — encore ${_fmt(remainingMins)}'
-                  : 'À l\'arrêt — encore ${_fmt(remainingMins)} une fois relancé',
+                  ? '${_lang.t('pumpElapsedRunningPrefix')}${_fmt(remainingMins)}'
+                  : '${_lang.t('pumpElapsedStoppedPrefix')}${_fmt(remainingMins)}${_lang.t('pumpElapsedStoppedSuffix')}',
               style: TextStyle(
                   color: Colors.grey[300],
                   fontSize: 12,
@@ -1403,8 +1404,10 @@ class _PumpControlScreenState extends State<PumpControlScreen>
           final levelLow = !_niveauResineOk || !_niveauDurcisseurOk;
           final startBlocked = !_isPumpOn && (notConnected || levelLow);
           final blockedLabel = !_isPumpOn && notConnected
-              ? (!_piConnected ? 'Pi injoignable' : 'Arduino déconnecté')
-              : 'Niveau bas — Remplir réservoir';
+              ? (!_piConnected
+                  ? _lang.t('pumpPiUnreachableShort')
+                  : _lang.t('pumpArduinoDisconnectedShort'))
+              : _lang.t('pumpLevelLowRefillBtnLabel');
           return GestureDetector(
             onTap: _togglePump,
             child: AnimatedContainer(
@@ -1453,7 +1456,9 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                   child: Text(
                     startBlocked
                         ? blockedLabel
-                        : (_isPumpOn ? 'Arrêter pompe' : 'Démarrer pompe'),
+                        : (_isPumpOn
+                            ? _lang.t('pumpStopPumpBtn')
+                            : _lang.t('pumpStartPumpBtn')),
                     style: TextStyle(
                       color: startBlocked
                           ? Colors.grey[500]
@@ -1475,8 +1480,9 @@ class _PumpControlScreenState extends State<PumpControlScreen>
         Builder(builder: (context) {
           final notConnected = !_piConnected || !_arduinoConnected;
           final startBlocked = !_tracteurOn && notConnected;
-          final blockedLabel =
-              !_piConnected ? 'Pi injoignable' : 'Arduino déconnecté';
+          final blockedLabel = !_piConnected
+              ? _lang.t('pumpPiUnreachableShort')
+              : _lang.t('pumpArduinoDisconnectedShort');
           return GestureDetector(
             onTap: _toggleTracteur,
             child: AnimatedContainer(
@@ -1525,7 +1531,9 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                   child: Text(
                     startBlocked
                         ? blockedLabel
-                        : (_tracteurOn ? 'Arrêter tracteur' : 'Démarrer tracteur'),
+                        : (_tracteurOn
+                            ? _lang.t('pumpStopTracteurBtn')
+                            : _lang.t('pumpStartTracteurBtn')),
                     style: TextStyle(
                       color: startBlocked
                           ? Colors.grey[500]
@@ -1548,7 +1556,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
         Row(children: [
           Expanded(
             child: _tracteurSensButton(
-              label: 'Avant',
+              label: _lang.t('pumpDirForwardLabel'),
               icon: Icons.arrow_upward,
               selected: _tracteurSensAvant,
               onTap: () => _setTracteurSens(true),
@@ -1557,7 +1565,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
           const SizedBox(width: 8),
           Expanded(
             child: _tracteurSensButton(
-              label: 'Arrière',
+              label: _lang.t('pumpDirBackwardLabel'),
               icon: Icons.arrow_downward,
               selected: !_tracteurSensAvant,
               onTap: () => _setTracteurSens(false),
@@ -1635,7 +1643,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           // Débit
           Expanded(child: Column(children: [
-            Text('MESURÉ',
+            Text(_lang.t('pumpMeasuredLabel'),
                 style: TextStyle(
                     color: Colors.grey[600],
                     fontSize: 7,
@@ -1652,7 +1660,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
             const SizedBox(height: 10),
             Divider(color: Colors.white.withOpacity(0.08), height: 1),
             const SizedBox(height: 10),
-            Text('RÉGLAGE',
+            Text(_lang.t('pumpSettingLabel'),
                 style: TextStyle(
                     color: Colors.grey[600],
                     fontSize: 7,
@@ -1734,7 +1742,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
 
           // Vitesse
           Expanded(child: Column(children: [
-            Text('MESURÉ',
+            Text(_lang.t('pumpMeasuredLabel'),
                 style: TextStyle(
                     color: Colors.grey[600],
                     fontSize: 7,
@@ -1746,7 +1754,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
             const SizedBox(height: 10),
             Divider(color: Colors.white.withOpacity(0.08), height: 1),
             const SizedBox(height: 10),
-            Text('RÉGLAGE',
+            Text(_lang.t('pumpSettingLabel'),
                 style: TextStyle(
                     color: Colors.grey[600],
                     fontSize: 7,
@@ -1932,9 +1940,9 @@ class _PumpControlScreenState extends State<PumpControlScreen>
         ),
         child: Column(
           children: [
-            const Text(
-              'Pompe Bz Bots',
-              style: TextStyle(
+            Text(
+              _lang.t('pumpDiagramTitle'),
+              style: const TextStyle(
                 color: Colors.white70,
                 fontSize: 12,
                 fontWeight: FontWeight.w900,
@@ -1959,7 +1967,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                       Text('${_tempNourriceResine.toStringAsFixed(1).replaceAll('.', ',')}°C',
                           style: const TextStyle(
                               color: Colors.purpleAccent, fontSize: 14, fontWeight: FontWeight.w900)),
-                      Text('Résine (entrée)',
+                      Text(_lang.t('pumpFeedResinInletLabel'),
                           style: TextStyle(color: Colors.grey[500], fontSize: 8)),
                     ]),
                   ]),
@@ -1973,7 +1981,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                       Text('${_tempNourriceDurcisseur.toStringAsFixed(1).replaceAll('.', ',')}°C',
                           style: const TextStyle(
                               color: Color(0xFF22D3EE), fontSize: 14, fontWeight: FontWeight.w900)),
-                      Text('Durcisseur (entrée)',
+                      Text(_lang.t('pumpFeedDurcisseurInletLabel'),
                           style: TextStyle(color: Colors.grey[500], fontSize: 8)),
                     ]),
                   ]),
@@ -2197,7 +2205,9 @@ class TankLevelGauge extends StatelessWidget {
   final bool badgeOnRight;
   final VoidCallback? onRefill;
 
-  const TankLevelGauge({
+  final _lang = LangService();
+
+  TankLevelGauge({
     super.key,
     required this.label,
     required this.fillRatio,
@@ -2241,7 +2251,7 @@ class TankLevelGauge extends StatelessWidget {
                 const Icon(Icons.local_gas_station_outlined,
                     color: Colors.greenAccent, size: 13),
                 const SizedBox(width: 4),
-                Text('Faire le plein',
+                Text(_lang.t('pumpRefillBtnLabel'),
                     style: TextStyle(
                         color: Colors.greenAccent[100],
                         fontSize: 9,
@@ -2346,7 +2356,7 @@ class TankLevelGauge extends StatelessWidget {
                 color: isSensorOk ? Colors.greenAccent : Colors.redAccent,
                 size: 11),
             const SizedBox(width: 3),
-            Text(isSensorOk ? 'Niveau OK' : 'Niveau bas',
+            Text(isSensorOk ? _lang.t('pumpLevelOkLabel') : _lang.t('pumpLevelLowLabel'),
                 style: TextStyle(
                     color: isSensorOk ? Colors.greenAccent : Colors.redAccent,
                     fontSize: 9,
@@ -2382,7 +2392,9 @@ class PumpLoadGauge extends StatelessWidget {
   final double percent; // 0–100
   final Color color;
 
-  const PumpLoadGauge({
+  final _lang = LangService();
+
+  PumpLoadGauge({
     super.key,
     required this.label,
     required this.percent,
@@ -2481,7 +2493,7 @@ class PumpLoadGauge extends StatelessWidget {
         );
       }),
       const SizedBox(height: 6),
-      Text('CHARGE',
+      Text(_lang.t('pumpLoadLabel'),
           style: TextStyle(
               color: Colors.grey[500],
               fontSize: 7,
