@@ -1,6 +1,7 @@
 // ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
 import '../services/pdf_storage_service.dart';
+import '../services/lang_service.dart';
 import 'pdf_viewer_screen.dart';
 import '../widgets/lang_selector.dart';
 
@@ -13,6 +14,7 @@ class PumpRapportsScreen extends StatefulWidget {
 }
 
 class _PumpRapportsScreenState extends State<PumpRapportsScreen> {
+  final _lang = LangService();
   final _storage = PdfStorageService();
   List<PdfFile> _pdfs = [];
   bool _loading = true;
@@ -20,6 +22,7 @@ class _PumpRapportsScreenState extends State<PumpRapportsScreen> {
   @override
   void initState() {
     super.initState();
+    _lang.addListener(() { if (mounted) setState(() {}); });
     _loadPdfs();
   }
 
@@ -34,15 +37,15 @@ class _PumpRapportsScreenState extends State<PumpRapportsScreen> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: const Color(0xFF0D0D0D),
-        title: const Text('Supprimer ?',
-          style: TextStyle(color: Colors.white)),
-        content: Text('Supprimer "${pdf.name}" ?',
+        title: Text(_lang.t('pumpRapportsDeleteTitle'),
+          style: const TextStyle(color: Colors.white)),
+        content: Text('${_lang.t('pumpRapportsDeleteConfirmPrefix')} "${pdf.name}" ?',
           style: const TextStyle(color: Colors.white70)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false),
-            child: const Text('Annuler', style: TextStyle(color: Colors.grey))),
+            child: Text(_lang.t('pumpRapportsCancelBtn'), style: const TextStyle(color: Colors.grey))),
           TextButton(onPressed: () => Navigator.pop(context, true),
-            child: const Text('Supprimer', style: TextStyle(color: Colors.red))),
+            child: Text(_lang.t('pumpRapportsDeleteBtn'), style: const TextStyle(color: Colors.red))),
         ],
       ),
     );
@@ -55,8 +58,8 @@ class _PumpRapportsScreenState extends State<PumpRapportsScreen> {
   @override
   Widget build(BuildContext context) {
     final title = widget.chantierNom != null
-      ? 'Rapports — ${widget.chantierNom}'
-      : 'Tous les rapports';
+      ? '${_lang.t('pumpRapportsTitlePrefix')} — ${widget.chantierNom}'
+      : _lang.t('pumpRapportsAllTitle');
 
     return Scaffold(
       backgroundColor: const Color(0xFF050505),
@@ -84,11 +87,11 @@ class _PumpRapportsScreenState extends State<PumpRapportsScreen> {
               Icon(Icons.picture_as_pdf_outlined,
                 color: Colors.grey[700], size: 56),
               const SizedBox(height: 16),
-              const Text('Aucun rapport enregistré',
-                style: TextStyle(color: Colors.white,
+              Text(_lang.t('pumpRapportsEmptyTitle'),
+                style: const TextStyle(color: Colors.white,
                   fontWeight: FontWeight.w700, fontSize: 16)),
               const SizedBox(height: 8),
-              Text('Les rapports PDF seront sauvegardés ici',
+              Text(_lang.t('pumpRapportsEmptySubtitle'),
                 style: TextStyle(color: Colors.grey[600], fontSize: 12)),
             ]))
           : RefreshIndicator(
@@ -142,7 +145,7 @@ class _PumpRapportsScreenState extends State<PumpRapportsScreen> {
           Icon(Icons.calendar_today_outlined,
             color: Colors.grey[600], size: 11),
           const SizedBox(width: 4),
-          Text('$date à $time',
+          Text('$date ${_lang.t('pumpRapportsAtConnector')} $time',
             style: TextStyle(color: Colors.grey[600], fontSize: 11)),
           const SizedBox(width: 10),
           Icon(Icons.storage_outlined,

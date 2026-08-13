@@ -4,6 +4,7 @@ import 'package:appwrite/models.dart' as models;
 import '../services/pump_service.dart';
 import '../services/auth_service.dart';
 import '../services/app_roles.dart';
+import '../services/lang_service.dart';
 import '../widgets/lang_selector.dart';
 import 'pump_chantier_screen.dart';
 import 'pump_rapports_screen.dart';
@@ -17,6 +18,7 @@ class PumpScreen extends StatefulWidget {
 class _PumpScreenState extends State<PumpScreen> {
   final _service = PumpService();
   final _auth    = AuthService();
+  final _lang    = LangService();
   List<models.Document> _chantiers = [];
   bool   _loading  = true;
   String _userId   = '';
@@ -27,6 +29,7 @@ class _PumpScreenState extends State<PumpScreen> {
   @override
   void initState() {
     super.initState();
+    _lang.addListener(() { if (mounted) setState(() {}); });
     _loadData();
   }
 
@@ -81,17 +84,17 @@ class _PumpScreenState extends State<PumpScreen> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: const Color(0xFF0D0D0D),
-        title: const Text('Supprimer ?',
-          style: TextStyle(color: Colors.white)),
-        content: const Text('Ce chantier sera supprimé définitivement.',
-          style: TextStyle(color: Colors.white70)),
+        title: Text(_lang.t('pumpScreenDeleteTitle'),
+          style: const TextStyle(color: Colors.white)),
+        content: Text(_lang.t('pumpScreenDeleteConfirmMsg'),
+          style: const TextStyle(color: Colors.white70)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false),
-            child: const Text('Annuler',
-              style: TextStyle(color: Colors.grey))),
+            child: Text(_lang.t('pumpScreenCancelBtn'),
+              style: const TextStyle(color: Colors.grey))),
           TextButton(onPressed: () => Navigator.pop(context, true),
-            child: const Text('Supprimer',
-              style: TextStyle(color: Colors.red))),
+            child: Text(_lang.t('pumpScreenDeleteBtn'),
+              style: const TextStyle(color: Colors.red))),
         ],
       ),
     );
@@ -122,8 +125,8 @@ class _PumpScreenState extends State<PumpScreen> {
             child: const Icon(Icons.water_drop,
               color: Color(0xFF22D3EE), size: 14)),
           const SizedBox(width: 8),
-          const Text('POMPE RÉSINE',
-            style: TextStyle(color: Colors.white,
+          Text(_lang.t('pumpHubScreenTitle'),
+            style: const TextStyle(color: Colors.white,
               fontWeight: FontWeight.w900, fontSize: 14,
               letterSpacing: 1.5)),
         ]),
@@ -131,7 +134,7 @@ class _PumpScreenState extends State<PumpScreen> {
           IconButton(
             icon: const Icon(Icons.picture_as_pdf_outlined,
               color: Color(0xFF22D3EE), size: 20),
-            tooltip: 'Tous les rapports',
+            tooltip: _lang.t('pumpRapportsAllTitle'),
             onPressed: () => Navigator.push(context, MaterialPageRoute(
               builder: (_) => const PumpRapportsScreen()))),
           IconButton(icon: const Icon(Icons.refresh, color: Colors.white54),
@@ -164,8 +167,8 @@ class _PumpScreenState extends State<PumpScreen> {
         backgroundColor: const Color(0xFF22D3EE),
         foregroundColor: Colors.black,
         icon: const Icon(Icons.add),
-        label: const Text('Créer chantier',
-          style: TextStyle(fontWeight: FontWeight.w700)),
+        label: Text(_lang.t('pumpScreenCreateChantierBtn'),
+          style: const TextStyle(fontWeight: FontWeight.w700)),
       ),
     );
   }
@@ -216,10 +219,10 @@ class _PumpScreenState extends State<PumpScreen> {
         child: Icon(Icons.water_drop_outlined,
           color: const Color(0xFF22D3EE).withOpacity(0.5), size: 36)),
       const SizedBox(height: 20),
-      const Text('Aucun chantier', style: TextStyle(color: Colors.white,
+      Text(_lang.t('pumpScreenNoChantierMsg'), style: const TextStyle(color: Colors.white,
         fontWeight: FontWeight.w700, fontSize: 16)),
       const SizedBox(height: 8),
-      Text('Appuyez sur + pour créer votre premier chantier',
+      Text(_lang.t('pumpScreenCreateFirstChantierMsg'),
         style: TextStyle(color: Colors.grey[600], fontSize: 12)),
       const SizedBox(height: 80),
     ]));
@@ -351,6 +354,7 @@ class _CreateChantierSheet extends StatefulWidget {
 }
 
 class _CreateChantierSheetState extends State<_CreateChantierSheet> {
+  final _lang     = LangService();
   final _nomCtrl  = TextEditingController();
   final _vilCtrl  = TextEditingController();
   final _rueCtrl  = TextEditingController();
@@ -368,7 +372,7 @@ class _CreateChantierSheetState extends State<_CreateChantierSheet> {
             decoration: BoxDecoration(color: Colors.grey[700],
               borderRadius: BorderRadius.circular(2))),
           const SizedBox(height: 16),
-          const Text('NOUVEAU CHANTIER', style: TextStyle(
+          Text(_lang.t('pumpScreenNewChantierTitle'), style: const TextStyle(
             color: Colors.white, fontWeight: FontWeight.w900,
             fontSize: 13, letterSpacing: 2)),
           const SizedBox(height: 20),
@@ -404,14 +408,14 @@ class _CreateChantierSheetState extends State<_CreateChantierSheet> {
               ])),
           ),
           const SizedBox(height: 10),
-          _field(_nomCtrl, 'Nom du chantier *',
+          _field(_nomCtrl, _lang.t('pumpScreenNomChantierHint'),
             Icons.construction_outlined),
           const SizedBox(height: 10),
-          _field(_vilCtrl, 'Ville', Icons.location_city_outlined),
+          _field(_vilCtrl, _lang.t('pumpScreenVilleHint'), Icons.location_city_outlined),
           const SizedBox(height: 10),
-          _field(_rueCtrl, 'Rue', Icons.map_outlined),
+          _field(_rueCtrl, _lang.t('pumpScreenRueHint'), Icons.map_outlined),
           const SizedBox(height: 10),
-          _field(_batCtrl, 'N° bâtiment', Icons.apartment_outlined),
+          _field(_batCtrl, _lang.t('pumpScreenBatimentHint'), Icons.apartment_outlined),
           const SizedBox(height: 20),
           SizedBox(
             width: double.infinity, height: 48,
@@ -433,7 +437,7 @@ class _CreateChantierSheetState extends State<_CreateChantierSheet> {
                 foregroundColor: Colors.black,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12))),
-              child: const Text('CRÉER', style: TextStyle(
+              child: Text(_lang.t('pumpScreenCreateBtn'), style: const TextStyle(
                 fontWeight: FontWeight.w900, fontSize: 13,
                 letterSpacing: 2)),
             ),
@@ -474,6 +478,7 @@ class _EditChantierSheet extends StatefulWidget {
 }
 
 class _EditChantierSheetState extends State<_EditChantierSheet> {
+  final _lang = LangService();
   late TextEditingController _nomCtrl;
   late TextEditingController _vilCtrl;
   late TextEditingController _rueCtrl;
@@ -510,7 +515,7 @@ class _EditChantierSheetState extends State<_EditChantierSheet> {
             decoration: BoxDecoration(color: Colors.grey[700],
               borderRadius: BorderRadius.circular(2))),
           const SizedBox(height: 16),
-          const Text('MODIFIER LE CHANTIER', style: TextStyle(
+          Text(_lang.t('pumpScreenEditChantierTitle'), style: const TextStyle(
             color: Colors.white, fontWeight: FontWeight.w900,
             fontSize: 13, letterSpacing: 2)),
           const SizedBox(height: 20),
@@ -546,14 +551,14 @@ class _EditChantierSheetState extends State<_EditChantierSheet> {
               ])),
           ),
           const SizedBox(height: 10),
-          _field(_nomCtrl, 'Nom du chantier *',
+          _field(_nomCtrl, _lang.t('pumpScreenNomChantierHint'),
             Icons.construction_outlined),
           const SizedBox(height: 10),
-          _field(_vilCtrl, 'Ville', Icons.location_city_outlined),
+          _field(_vilCtrl, _lang.t('pumpScreenVilleHint'), Icons.location_city_outlined),
           const SizedBox(height: 10),
-          _field(_rueCtrl, 'Rue', Icons.map_outlined),
+          _field(_rueCtrl, _lang.t('pumpScreenRueHint'), Icons.map_outlined),
           const SizedBox(height: 10),
-          _field(_batCtrl, 'N° bâtiment', Icons.apartment_outlined),
+          _field(_batCtrl, _lang.t('pumpScreenBatimentHint'), Icons.apartment_outlined),
           const SizedBox(height: 20),
           SizedBox(
             width: double.infinity, height: 48,
@@ -575,7 +580,7 @@ class _EditChantierSheetState extends State<_EditChantierSheet> {
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12))),
-              child: const Text('ENREGISTRER', style: TextStyle(
+              child: Text(_lang.t('pumpScreenSaveBtn'), style: const TextStyle(
                 fontWeight: FontWeight.w900, fontSize: 13,
                 letterSpacing: 2)),
             ),

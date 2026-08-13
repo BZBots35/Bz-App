@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:appwrite/models.dart' as models;
 import 'package:fl_chart/fl_chart.dart';
 import '../services/pump_service.dart';
+import '../services/lang_service.dart';
 import 'pump_control_screen.dart';
 
 class PumpOperationScreen extends StatefulWidget {
@@ -30,6 +31,7 @@ class PumpOperationScreen extends StatefulWidget {
 
 class _PumpOperationScreenState extends State<PumpOperationScreen> {
   final _service = PumpService();
+  final _lang = LangService();
 
   // ── Connexion Pi ──────────────────────────────
   static const String _piBase = 'http://10.42.0.1:5000';
@@ -82,6 +84,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
   @override
   void initState() {
     super.initState();
+    _lang.addListener(() { if (mounted) setState(() {}); });
     _currentCanalisationDoc = widget.canalisationDoc;
     _checkPiConnection();
     final d = widget.canalisationDoc.data;
@@ -123,8 +126,8 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
   void _showPassCurve(int passNum) {
     final raw = _passesData['$passNum'];
     if (raw == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Aucune courbe enregistrée pour cette passe.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(_lang.t('pumpOpNoCurveRecordedMsg'))));
       return;
     }
     final points = (raw as List)
@@ -144,7 +147,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
         title: Row(children: [
           const Icon(Icons.show_chart, color: Color(0xFF22D3EE), size: 20),
           const SizedBox(width: 8),
-          Text('Courbe — Passe N°$passNum',
+          Text('${_lang.t('pumpOpCurveTitlePrefix')} N°$passNum',
               style: const TextStyle(
                   color: Colors.white, fontWeight: FontWeight.w900, fontSize: 13)),
         ]),
@@ -199,7 +202,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
                       alignment: Alignment.topRight,
                       style: TextStyle(color: Colors.grey[400], fontSize: 8),
                       labelResolver: (line) =>
-                          'Cible ${widget.epaisseur.toStringAsFixed(1)}mm'),
+                          '${_lang.t('pumpChartTargetPrefix')}${widget.epaisseur.toStringAsFixed(1)}mm'),
                 ),
               ]),
               lineBarsData: [
@@ -220,7 +223,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Fermer', style: TextStyle(color: Colors.grey))),
+              child: Text(_lang.t('pumpOpCloseBtn'), style: const TextStyle(color: Colors.grey))),
         ],
       ),
     );
@@ -241,7 +244,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
             const Icon(Icons.warning_amber_rounded,
                 color: Color(0xFFEAB308), size: 22),
             const SizedBox(width: 8),
-            Text('PASSE $passNum — VÉRIFICATION',
+            Text('${_lang.t('pumpOpPasseVerificationPrefix')} $passNum — ${_lang.t('pumpOpVerificationSuffix')}',
                 style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w900,
@@ -250,7 +253,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
           ]),
           content: Column(mainAxisSize: MainAxisSize.min, children: [
             Text(
-                'Avant de démarrer la passe $passNum, vérifiez que la résine est correctement préparée et que la pompe est prête.',
+                '${_lang.t('pumpOpBeforeStartingPassPrefix')} $passNum${_lang.t('pumpOpBeforeStartingPassSuffix')}',
                 style: TextStyle(
                     color: Colors.grey[400], fontSize: 12, height: 1.5)),
             const SizedBox(height: 16),
@@ -274,25 +277,25 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
                             color: Color(0xFF22D3EE), size: 14)
                         : null),
                 const SizedBox(width: 8),
-                const Expanded(
-                    child: Text('Résine prête et vérifiée',
-                        style: TextStyle(color: Colors.white, fontSize: 12))),
+                Expanded(
+                    child: Text(_lang.t('pumpOpResinReadyCheckLabel'),
+                        style: const TextStyle(color: Colors.white, fontSize: 12))),
               ]),
             ),
           ]),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Annuler',
-                    style: TextStyle(color: Colors.grey))),
+                child: Text(_lang.t('pumpOpCancelBtn'),
+                    style: const TextStyle(color: Colors.grey))),
             ElevatedButton(
               onPressed: checked ? () => Navigator.pop(ctx, true) : null,
               style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF22D3EE),
                   foregroundColor: Colors.black,
                   disabledBackgroundColor: Colors.grey.withOpacity(0.2)),
-              child: const Text('DÉMARRER',
-                  style: TextStyle(
+              child: Text(_lang.t('pumpOpStartBtn'),
+                  style: const TextStyle(
                       fontWeight: FontWeight.w900,
                       fontSize: 11,
                       letterSpacing: 1)),
@@ -337,8 +340,8 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
             passesDone: _passesDone,
           );
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text('✓ Canalisation terminée !'),
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('✓ ${_lang.t('pumpOpCanalisationDoneMsg')}'),
                 backgroundColor: Colors.green,
                 behavior: SnackBarBehavior.floating));
             Navigator.pop(context);
@@ -371,8 +374,8 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
             onPressed: () => Navigator.pop(context)),
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            const Text('COATING ',
-                style: TextStyle(
+            Text('${_lang.t('pumpOpCoatingLabel')} ',
+                style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w900,
                     fontSize: 14)),
@@ -414,7 +417,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
                             : Colors.red,
                         shape: BoxShape.circle)),
                 const SizedBox(width: 4),
-                Text(_piConnected ? 'PI CONNECTÉ' : 'PI HORS LIGNE',
+                Text(_piConnected ? _lang.t('pumpOpPiConnectedLabel') : _lang.t('pumpOpPiOfflineLabel'),
                     style: TextStyle(
                         color: _piConnected
                             ? const Color(0xFF22D3EE)
@@ -457,7 +460,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: Colors.white.withOpacity(0.06))),
       child: Column(children: [
-        Text('RAPPEL PARAMÈTRES',
+        Text(_lang.t('pumpOpParamsReminderTitle'),
             style: TextStyle(
                 color: Colors.grey[500],
                 fontSize: 8,
@@ -465,12 +468,12 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
                 letterSpacing: 2)),
         const SizedBox(height: 8),
         Row(children: [
-          _paramCell('Diamètre',   'DN${_diametre.toInt()}'),
-          _paramCell('Longueur',   '${_longueur}m'),
-          _paramCell('Ép./Passe',  '${widget.epaisseur.toStringAsFixed(2)}mm'),
-          _paramCell('Nb Passes',  '$_passes'),
-          _paramCell('Ép. Totale', '${totalEp}mm'),
-          _paramCell('Qté/Passe',  '${_qteParPasse.toStringAsFixed(2)}L',
+          _paramCell(_lang.t('pumpOpDiametreLabel'),   'DN${_diametre.toInt()}'),
+          _paramCell(_lang.t('pumpOpLongueurLabel'),   '${_longueur}m'),
+          _paramCell(_lang.t('pumpOpEpPasseLabel'),  '${widget.epaisseur.toStringAsFixed(2)}mm'),
+          _paramCell(_lang.t('pumpOpNbPassesLabel'),  '$_passes'),
+          _paramCell(_lang.t('pumpOpEpTotaleLabel'), '${totalEp}mm'),
+          _paramCell(_lang.t('pumpOpQtePasseLabel'),  '${_qteParPasse.toStringAsFixed(2)}L',
               color: const Color(0xFF22D3EE)),
         ]),
       ]),
@@ -512,7 +515,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
         Row(children: [
           const Icon(Icons.layers, color: Colors.purple, size: 13),
           const SizedBox(width: 6),
-          Text("SÉQUENCE D'INJECTION",
+          Text(_lang.t('pumpOpInjectionSequenceTitle'),
               style: TextStyle(
                   color: Colors.grey[400],
                   fontSize: 8,
@@ -567,7 +570,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
                                   fontWeight: FontWeight.w900)))),
               const SizedBox(width: 8),
               Expanded(
-                  child: Text('Passe N°$passNum',
+                  child: Text('${_lang.t('pumpOpPasseLabel')} N°$passNum',
                       style: TextStyle(
                           color: isDone
                               ? Colors.green
@@ -593,8 +596,8 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
                           const Icon(Icons.show_chart,
                               color: Color(0xFF22D3EE), size: 12),
                           const SizedBox(width: 3),
-                          const Text('Courbe',
-                              style: TextStyle(
+                          Text(_lang.t('pumpOpCourbeChipLabel'),
+                              style: const TextStyle(
                                   color: Color(0xFF22D3EE),
                                   fontSize: 9,
                                   fontWeight: FontWeight.w900)),
@@ -615,7 +618,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
                                   color: Colors.white.withOpacity(0.2),
                                   blurRadius: 6)
                             ]),
-                        child: const Text('GO',
+                        child: Text(_lang.t('pumpOpGoBtn'),
                             style: TextStyle(
                                 color: Colors.black,
                                 fontSize: 9,

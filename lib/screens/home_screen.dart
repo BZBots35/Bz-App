@@ -14,7 +14,7 @@ import 'profile_screen.dart';
 import 'my_robots_screen.dart';
 import 'bzvision_screen.dart';
 import 'onboarding_screen.dart';
-import 'pump_screen.dart';
+import 'pump_hub_screen.dart';
 import 'catalogue_screen.dart';
 import 'storage_screen.dart';
 import 'register_screen.dart';
@@ -299,7 +299,7 @@ class _HomeScreenState extends State<HomeScreen> {
           builder: (_) => BzVisionScreen())); break;
       case 'pompe':
         Navigator.push(context, MaterialPageRoute(
-          builder: (_) => const PumpScreen())); break;
+          builder: (_) => const PumpHubScreen())); break;
       default:
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(_lang.t('inDev')),

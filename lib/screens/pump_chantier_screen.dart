@@ -6,6 +6,7 @@ import 'package:appwrite/models.dart' as models;
 import 'package:printing/printing.dart';
 import '../services/pump_service.dart';
 import '../services/app_roles.dart';
+import '../services/lang_service.dart';
 import '../widgets/lang_selector.dart';
 import '../services/pdf_storage_service.dart';
 import 'pump_rapports_screen.dart';
@@ -54,6 +55,7 @@ class PumpChantierScreen extends StatefulWidget {
 
 class _PumpChantierScreenState extends State<PumpChantierScreen> {
   final _service = PumpService();
+  final _lang = LangService();
   List<models.Document> _canalisations = [];
   bool _loading = true;
   bool _addingCanalisation = false;
@@ -80,6 +82,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
   @override
   void initState() {
     super.initState();
+    _lang.addListener(() { if (mounted) setState(() {}); });
     final d = widget.chantierDoc.data;
     _resinType     = d['resinType']     as String? ?? 'spraycoat_plus';
     _epaisseur     = double.tryParse(d['epaisseur'] as String? ?? '0.75') ?? 0.75;
@@ -162,15 +165,15 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
       );
       await _loadCanalisations();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('✓ Canalisation ajoutée'),
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('✓ ${_lang.t('pumpChantierCanalisationAddedMsg')}'),
             backgroundColor: Colors.green,
             behavior: SnackBarBehavior.floating));
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Erreur lors de la création : $e'),
+            content: Text('${_lang.t('pumpChantierCreationErrorPrefix')} $e'),
             backgroundColor: Colors.red,
             behavior: SnackBarBehavior.floating,
             duration: const Duration(seconds: 8)));
@@ -227,7 +230,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
         Navigator.push(context, MaterialPageRoute(
           builder: (_) => RapportViewerScreen(
             pdfBytes: bytes,
-            title: 'Rapport Global',
+            title: _lang.t('pumpChantierGlobalReportTitle'),
           ),
         ));
       }
@@ -235,7 +238,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Erreur PDF : $e'), backgroundColor: Colors.red,
+          content: Text('${_lang.t('pumpChantierPdfErrorPrefix')} $e'), backgroundColor: Colors.red,
           behavior: SnackBarBehavior.floating));
       }
     }
@@ -255,14 +258,14 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
         leading: IconButton(
           icon: const Icon(Icons.chevron_left, color: Colors.white, size: 28),
           onPressed: () => Navigator.pop(context)),
-        title: Text(ch['nom'] as String? ?? 'Chantier',
+        title: Text(ch['nom'] as String? ?? _lang.t('pumpChantierDefaultName'),
           style: const TextStyle(color: Colors.white,
             fontWeight: FontWeight.w900, fontSize: 15)),
         actions: [
           IconButton(
             icon: const Icon(Icons.folder_open,
               color: Colors.orange, size: 20),
-            tooltip: 'Rapports du chantier',
+            tooltip: _lang.t('pumpChantierReportsTooltip'),
             onPressed: () => Navigator.push(context, MaterialPageRoute(
               builder: (_) => PumpRapportsScreen(
                 chantierPrefix: 'Rapport_${widget.chantierDoc.data['nom'] ?? ''}',
@@ -315,10 +318,10 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
                   Icon(Icons.water_drop_outlined,
                     color: Colors.grey[700], size: 40),
                   const SizedBox(height: 10),
-                  Text('Aucune canalisation',
+                  Text(_lang.t('pumpChantierNoCanalisationMsg'),
                     style: TextStyle(color: Colors.grey[600])),
                   const SizedBox(height: 4),
-                  Text('Appuyez sur + pour en ajouter',
+                  Text(_lang.t('pumpChantierTapToAddMsg'),
                     style: TextStyle(color: Colors.grey[700], fontSize: 11)),
                 ]))
               : RefreshIndicator(
@@ -345,7 +348,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
                 width: 16, height: 16,
                 child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
             : const Icon(Icons.add),
-        label: Text(_addingCanalisation ? 'Ajout...' : 'Ajouter ligne',
+        label: Text(_addingCanalisation ? _lang.t('pumpChantierAddingLabel') : _lang.t('pumpChantierAddLineLabel'),
           style: const TextStyle(fontWeight: FontWeight.w700)),
       ),
     );
@@ -369,7 +372,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
         Row(children: [
           Expanded(child: Column(
             crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('TYPE RÉSINE', style: TextStyle(
+            Text(_lang.t('pumpChantierResinTypeLabel'), style: TextStyle(
               color: Colors.grey[500], fontSize: 8,
               fontWeight: FontWeight.w900, letterSpacing: 1.5)),
             const SizedBox(height: 4),
@@ -406,28 +409,28 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
           ])),
           const SizedBox(width: 12),
           Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
-            Text('ÉP./PASSE', style: TextStyle(
+            Text(_lang.t('pumpChantierEpPasseLabel'), style: TextStyle(
               color: Colors.grey[500], fontSize: 8,
               fontWeight: FontWeight.w900, letterSpacing: 1.5)),
             const SizedBox(height: 4),
             Row(children: [
-              _paramBox('${epRec.toStringAsFixed(2)}', Colors.grey, 'Rec.'),
+              _paramBox('${epRec.toStringAsFixed(2)}', Colors.grey, _lang.t('pumpChantierRecLabel')),
               const SizedBox(width: 6),
               _epaisseurInput(epMin, epMax, isWarn),
             ]),
             if (isWarn)
-              Text('⚠ Valeur non recommandée',
+              Text('⚠ ${_lang.t('pumpChantierValueNotRecommendedMsg')}',
                 style: const TextStyle(color: Colors.red,
                   fontSize: 8, fontWeight: FontWeight.w700)),
           ]),
           const SizedBox(width: 12),
           Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
-            Text('PASSES', style: TextStyle(
+            Text(_lang.t('pumpChantierPassesLabel'), style: TextStyle(
               color: Colors.grey[500], fontSize: 8,
               fontWeight: FontWeight.w900, letterSpacing: 1.5)),
             const SizedBox(height: 4),
             Row(children: [
-              _paramBox('$_recPasses', Colors.grey, 'Rec.'),
+              _paramBox('$_recPasses', Colors.grey, _lang.t('pumpChantierRecLabel')),
               const SizedBox(width: 6),
               _passesInput(),
             ]),
@@ -448,7 +451,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
       child: Row(children: [
         const Icon(Icons.thermostat, color: Color(0xFF22D3EE), size: 16),
         const SizedBox(width: 8),
-        Text('ENVIRONNEMENT', style: TextStyle(color: Colors.grey[400], fontSize: 8, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
+        Text(_lang.t('pumpChantierEnvironmentLabel'), style: TextStyle(color: Colors.grey[400], fontSize: 8, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
         const SizedBox(width: 12),
         // Champ Température Extérieure
         Expanded(
@@ -458,7 +461,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
               controller: _tempExtCtrl,
               style: const TextStyle(color: Colors.white, fontSize: 11),
               decoration: InputDecoration(
-                hintText: 'Temp. Ext (ex: 21°C)',
+                hintText: _lang.t('pumpChantierTempExtHint'),
                 hintStyle: TextStyle(color: Colors.grey[600], fontSize: 10),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
                 filled: true,
@@ -479,7 +482,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
               controller: _meteoCtrl,
               style: const TextStyle(color: Colors.white, fontSize: 11),
               decoration: InputDecoration(
-                hintText: 'Météo (ex: Sec, Ensoleillé)',
+                hintText: _lang.t('pumpChantierMeteoHint'),
                 hintStyle: TextStyle(color: Colors.grey[600], fontSize: 10),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
                 filled: true,
@@ -588,7 +591,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
         const Icon(Icons.table_chart_outlined,
           color: Color(0xFF22D3EE), size: 13),
         const SizedBox(width: 6),
-        Text('DIMENSIONNEMENT (${_canalisations.length})',
+        Text('${_lang.t('pumpChantierDimensioningTitle')} (${_canalisations.length})',
           style: TextStyle(color: Colors.grey[400], fontSize: 9,
             fontWeight: FontWeight.w900, letterSpacing: 2)),
       ]),
@@ -617,12 +620,12 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
       fontWeight: FontWeight.w900, letterSpacing: 1.5);
     return [
       DataColumn(label: Text('#', style: s)),
-      DataColumn(label: Text('LIBELLÉ', style: s)),
-      DataColumn(label: Text('LONG. (m)', style: s)),
+      DataColumn(label: Text(_lang.t('pumpChantierColLabel'), style: s)),
+      DataColumn(label: Text(_lang.t('pumpChantierColLong'), style: s)),
       DataColumn(label: Text('Ø (mm)', style: s)),
-      DataColumn(label: Text('PASSES', style: s)),
-      DataColumn(label: Text('RÉSINE', style: s)),
-      DataColumn(label: Text('ACTION', style: s)),
+      DataColumn(label: Text(_lang.t('pumpChantierColPasses'), style: s)),
+      DataColumn(label: Text(_lang.t('pumpChantierColResine'), style: s)),
+      DataColumn(label: Text(_lang.t('pumpChantierColAction'), style: s)),
     ];
   }
 
@@ -673,8 +676,8 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
               decoration: BoxDecoration(
                 color: Colors.green.withOpacity(0.15),
                 borderRadius: BorderRadius.circular(6)),
-              child: const Text('✓ Terminé',
-                style: TextStyle(color: Colors.green,
+              child: Text('✓ ${_lang.t('pumpChantierDoneLabel')}',
+                style: const TextStyle(color: Colors.green,
                   fontSize: 9, fontWeight: FontWeight.w900))),
             const SizedBox(height: 3),
             GestureDetector(
@@ -685,8 +688,8 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
                 decoration: BoxDecoration(
                   color: Colors.blue.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(6)),
-                child: const Text('📄 Rapport',
-                  style: TextStyle(color: Colors.blue,
+                child: Text('📄 ${_lang.t('pumpChantierReportLabel')}',
+                  style: const TextStyle(color: Colors.blue,
                     fontSize: 9, fontWeight: FontWeight.w900)))),
           ])
         : Row(children: [
@@ -703,7 +706,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
                     color: const Color(0xFF22D3EE).withOpacity(0.3),
                     blurRadius: 8)]),
                 child: Text(
-                  statut == 'en_cours' ? '▶ Continuer' : '▶ Démarrer',
+                  statut == 'en_cours' ? '▶ ${_lang.t('pumpChantierContinueBtn')}' : '▶ ${_lang.t('pumpChantierStartBtn')}',
                   style: const TextStyle(color: Colors.white,
                     fontSize: 9, fontWeight: FontWeight.w900)))),
             const SizedBox(width: 4),
@@ -743,7 +746,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
           color: const Color(0xFF22D3EE).withOpacity(0.2))),
       child: Row(children: [
         Expanded(child: Column(children: [
-          Text('CUMUL LINÉAIRE', style: TextStyle(
+          Text(_lang.t('pumpChantierLinearTotalLabel'), style: TextStyle(
             color: Colors.grey[500], fontSize: 8,
             fontWeight: FontWeight.w900, letterSpacing: 1.5)),
           const SizedBox(height: 4),
@@ -759,7 +762,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
         Container(width: 1, height: 50,
           color: Colors.white.withOpacity(0.1)),
         Expanded(child: Column(children: [
-          Text('QUANTITÉ RÉSINE', style: TextStyle(
+          Text(_lang.t('pumpChantierResinQtyLabel'), style: TextStyle(
             color: Colors.grey[500], fontSize: 8,
             fontWeight: FontWeight.w900, letterSpacing: 1.5)),
           const SizedBox(height: 4),
@@ -812,7 +815,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
         Navigator.push(context, MaterialPageRoute(
           builder: (_) => RapportViewerScreen(
             pdfBytes: bytes,
-            title: 'Rapport $label',
+            title: '${_lang.t('pumpChantierRowReportTitlePrefix')} $label',
           ),
         ));
       }
@@ -820,7 +823,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Erreur PDF : $e'), backgroundColor: Colors.red,
+          content: Text('${_lang.t('pumpChantierPdfErrorPrefix')} $e'), backgroundColor: Colors.red,
           behavior: SnackBarBehavior.floating));
       }
     }
@@ -835,6 +838,7 @@ class _AddCanalisationSheet extends StatefulWidget {
 }
 
 class _AddCanalisationSheetState extends State<_AddCanalisationSheet> {
+  final _lang = LangService();
   final _labelCtrl = TextEditingController();
   final _lonCtrl   = TextEditingController(text: '10');
   final _diaCtrl   = TextEditingController(text: '100');
@@ -853,22 +857,22 @@ class _AddCanalisationSheetState extends State<_AddCanalisationSheet> {
           decoration: BoxDecoration(color: Colors.grey[700],
             borderRadius: BorderRadius.circular(2))),
         const SizedBox(height: 16),
-        const Text('NOUVELLE CANALISATION', style: TextStyle(
+        Text(_lang.t('pumpChantierNewCanalisationTitle'), style: const TextStyle(
           color: Colors.white, fontWeight: FontWeight.w900,
           fontSize: 13, letterSpacing: 2)),
         const SizedBox(height: 20),
-        _field(_labelCtrl, 'Libellé (optionnel)', Icons.label_outline),
+        _field(_labelCtrl, _lang.t('pumpChantierLabelOptionalHint'), Icons.label_outline),
         const SizedBox(height: 10),
         Row(children: [
-          Expanded(child: _field(_lonCtrl, 'Longueur (m)',
-            Icons.straighten)),
+          Expanded(child: _field(_lonCtrl, _lang.t('pumpChantierLongueurHint'),
+            Icons.straighten, isNumeric: true)),
           const SizedBox(width: 10),
-          Expanded(child: _field(_diaCtrl, 'Diamètre (mm)',
-            Icons.circle_outlined)),
+          Expanded(child: _field(_diaCtrl, _lang.t('pumpChantierDiametreHint'),
+            Icons.circle_outlined, isNumeric: true)),
         ]),
         const SizedBox(height: 10),
         Row(children: [
-          Text('Passes : ', style: TextStyle(
+          Text('${_lang.t('pumpChantierPassesFieldLabel')} : ', style: TextStyle(
             color: Colors.grey[400], fontSize: 12)),
           const SizedBox(width: 8),
           GestureDetector(
@@ -911,7 +915,7 @@ class _AddCanalisationSheetState extends State<_AddCanalisationSheet> {
               foregroundColor: Colors.black,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12))),
-            child: const Text('AJOUTER', style: TextStyle(
+            child: Text(_lang.t('pumpChantierAddBtn'), style: const TextStyle(
               fontWeight: FontWeight.w900, fontSize: 13,
               letterSpacing: 2)),
           ),
@@ -920,10 +924,11 @@ class _AddCanalisationSheetState extends State<_AddCanalisationSheet> {
     );
   }
 
-  Widget _field(TextEditingController ctrl, String label, IconData icon) {
+  Widget _field(TextEditingController ctrl, String label, IconData icon,
+      {bool isNumeric = false}) {
     return TextField(
       controller: ctrl,
-      keyboardType: label.contains('m)') || label.contains('mm)')
+      keyboardType: isNumeric
         ? const TextInputType.numberWithOptions(decimal: true)
         : TextInputType.text,
       style: const TextStyle(color: Colors.white, fontSize: 13),

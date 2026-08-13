@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import '../services/lang_service.dart';
 
 /// Écran de test/debug : affiche en direct les données brutes que la Pi
 /// reçoit de l'Arduino via /telemetry. Pas de logique métier, juste de
@@ -16,6 +17,7 @@ class PumpDebugScreen extends StatefulWidget {
 }
 
 class _PumpDebugScreenState extends State<PumpDebugScreen> {
+  final _lang = LangService();
   Timer? _timer;
 
   bool _piReachable = false;
@@ -54,6 +56,7 @@ class _PumpDebugScreenState extends State<PumpDebugScreen> {
   @override
   void initState() {
     super.initState();
+    _lang.addListener(() { if (mounted) setState(() {}); });
     _fetch();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _fetch());
   }
@@ -117,8 +120,8 @@ class _PumpDebugScreenState extends State<PumpDebugScreen> {
       appBar: AppBar(
         backgroundColor: Colors.black,
         elevation: 0,
-        title: const Text('DEBUG — ARDUINO ↔ PI',
-            style: TextStyle(
+        title: Text(_lang.t('pumpDebugTitle'),
+            style: const TextStyle(
                 color: Colors.white, fontWeight: FontWeight.w900, fontSize: 14)),
         actions: [
           IconButton(
@@ -133,86 +136,87 @@ class _PumpDebugScreenState extends State<PumpDebugScreen> {
           _statusBadge(),
           const SizedBox(height: 16),
 
-          _sectionTitle('CYCLE'),
+          _sectionTitle(_lang.t('pumpDebugCycleSection')),
           const SizedBox(height: 8),
-          _valueTile('État machine', '$_etatLabel ($_etat)', Colors.amber),
+          _valueTile(_lang.t('pumpDebugEtatMachineLabel'), '$_etatLabel ($_etat)', Colors.amber),
           const SizedBox(height: 16),
 
-          _sectionTitle('DÉBITS'),
+          _sectionTitle(_lang.t('pumpDebugDebitsSection')),
           const SizedBox(height: 8),
           Row(children: [
             Expanded(
-                child: _valueTile('Débit 1', '${_debit1.toStringAsFixed(3)} L/min',
+                child: _valueTile('${_lang.t('pumpDebugDebitLabel')} 1', '${_debit1.toStringAsFixed(3)} L/min',
                     Colors.purpleAccent)),
             const SizedBox(width: 8),
             Expanded(
-                child: _valueTile('Débit 2', '${_debit2.toStringAsFixed(3)} L/min',
+                child: _valueTile('${_lang.t('pumpDebugDebitLabel')} 2', '${_debit2.toStringAsFixed(3)} L/min',
                     const Color(0xFF22D3EE))),
           ]),
           const SizedBox(height: 8),
-          _valueTile('Vitesse 4', '${_vitesse4.toStringAsFixed(3)} L/min',
+          _valueTile(_lang.t('pumpDebugVitesse4Label'), '${_vitesse4.toStringAsFixed(3)} L/min',
               Colors.tealAccent),
           const SizedBox(height: 16),
 
-          _sectionTitle('CHARGES MOTEUR (courant)'),
+          _sectionTitle(_lang.t('pumpDebugChargesSection')),
           const SizedBox(height: 8),
           Row(children: [
             Expanded(
-                child: _valueTile('Charge 1',
+                child: _valueTile('${_lang.t('pumpDebugChargeLabel')} 1',
                     '${_charge1.toStringAsFixed(1)} %', Colors.purpleAccent)),
             const SizedBox(width: 8),
             Expanded(
-                child: _valueTile('Charge 2',
+                child: _valueTile('${_lang.t('pumpDebugChargeLabel')} 2',
                     '${_charge2.toStringAsFixed(1)} %', const Color(0xFF22D3EE))),
           ]),
           const SizedBox(height: 16),
 
-          _sectionTitle('TEMPÉRATURES (PT100)'),
+          _sectionTitle(_lang.t('pumpDebugTempSection')),
           const SizedBox(height: 8),
           Row(children: [
-            Expanded(child: _tempTile('Résine (pompe)', _tempPR, Colors.purpleAccent)),
+            Expanded(child: _tempTile(_lang.t('pumpDebugResinePompeLabel'), _tempPR, Colors.purpleAccent)),
             const SizedBox(width: 8),
-            Expanded(child: _tempTile('Durcisseur (pompe)', _tempPD, const Color(0xFF22D3EE))),
+            Expanded(child: _tempTile(_lang.t('pumpDebugDurcisseurPompeLabel'), _tempPD, const Color(0xFF22D3EE))),
           ]),
           const SizedBox(height: 8),
           Row(children: [
-            Expanded(child: _tempTile('Résine (réservoir)', _tempRR, Colors.purpleAccent)),
+            Expanded(child: _tempTile(_lang.t('pumpDebugResineReservoirLabel'), _tempRR, Colors.purpleAccent)),
             const SizedBox(width: 8),
-            Expanded(child: _tempTile('Durcisseur (réservoir)', _tempRD, const Color(0xFF22D3EE))),
+            Expanded(child: _tempTile(_lang.t('pumpDebugDurcisseurReservoirLabel'), _tempRD, const Color(0xFF22D3EE))),
           ]),
           const SizedBox(height: 16),
 
-          _sectionTitle('NIVEAUX RÉSERVOIRS'),
+          _sectionTitle(_lang.t('pumpDebugNiveauxSection')),
           const SizedBox(height: 8),
           Row(children: [
             Expanded(
-                child: _valueTile('Niveau résine',
-                    _niveauResine == 1 ? 'BAS ⚠️' : 'OK',
+                child: _valueTile(_lang.t('pumpDebugNiveauResineLabel'),
+                    _niveauResine == 1 ? _lang.t('pumpDebugBasLabel') : _lang.t('pumpDebugOkLabel'),
                     _niveauResine == 1 ? Colors.redAccent : Colors.greenAccent)),
             const SizedBox(width: 8),
             Expanded(
-                child: _valueTile('Niveau durcisseur',
-                    _niveauDurcisseur == 1 ? 'BAS ⚠️' : 'OK',
+                child: _valueTile(_lang.t('pumpDebugNiveauDurcisseurLabel'),
+                    _niveauDurcisseur == 1 ? _lang.t('pumpDebugBasLabel') : _lang.t('pumpDebugOkLabel'),
                     _niveauDurcisseur == 1 ? Colors.redAccent : Colors.greenAccent)),
           ]),
           const SizedBox(height: 16),
 
-          _valueTile('Arduino → Pi frais', _arduinoConnected ? 'OUI' : 'NON',
+          _valueTile(_lang.t('pumpDebugArduinoPiFraisLabel'),
+              _arduinoConnected ? _lang.t('pumpDebugOuiLabel') : _lang.t('pumpDebugNonLabel'),
               _arduinoConnected ? Colors.greenAccent : Colors.redAccent),
           const SizedBox(height: 16),
           Text(
             _lastFetch != null
-                ? 'Dernière réponse : ${_lastFetch!.hour.toString().padLeft(2, '0')}:${_lastFetch!.minute.toString().padLeft(2, '0')}:${_lastFetch!.second.toString().padLeft(2, '0')}'
-                : 'Aucune réponse reçue pour le moment',
+                ? '${_lang.t('pumpDebugLastResponsePrefix')} ${_lastFetch!.hour.toString().padLeft(2, '0')}:${_lastFetch!.minute.toString().padLeft(2, '0')}:${_lastFetch!.second.toString().padLeft(2, '0')}'
+                : _lang.t('pumpDebugNoResponseYet'),
             style: TextStyle(color: Colors.grey[500], fontSize: 11),
           ),
           if (_lastError != null) ...[
             const SizedBox(height: 4),
-            Text('Erreur : $_lastError',
+            Text('${_lang.t('pumpDebugErrorPrefix')} $_lastError',
                 style: const TextStyle(color: Colors.redAccent, fontSize: 11)),
           ],
           const SizedBox(height: 20),
-          Text('JSON BRUT REÇU DE /telemetry',
+          Text(_lang.t('pumpDebugRawJsonLabel'),
               style: TextStyle(
                   color: Colors.grey[500],
                   fontSize: 9,
@@ -268,7 +272,7 @@ class _PumpDebugScreenState extends State<PumpDebugScreen> {
         ),
         const SizedBox(width: 8),
         Text(
-          _piReachable ? 'PI JOIGNABLE (${widget.piBase})' : 'PI INJOIGNABLE',
+          _piReachable ? '${_lang.t('pumpDebugPiReachableLabel')} (${widget.piBase})' : _lang.t('pumpDebugPiUnreachableLabel'),
           style: TextStyle(
               color: _piReachable ? Colors.greenAccent : Colors.redAccent,
               fontWeight: FontWeight.w900,

@@ -19,7 +19,18 @@ class PumpControlScreen extends StatefulWidget {
   final double epaisseur;
   final String resinType, userName, piBase;
   final int passNum, passesDone, passes;
+  // NB: qteParPasse n'est plus utilisé en interne depuis l'ajout du
+  // panneau specs modifiables — l'écran recalcule sa propre valeur via
+  // un getter (_qteParPasse) dérivé de longueur/diametre/epaisseur,
+  // pour rester à jour si ces valeurs sont modifiées en direct. Garde
+  // ce paramètre pour compatibilité avec les appels existants.
   final double longueur, diametre, qteParPasse;
+  // Quand true, affiche un panneau modifiable (diamètre/longueur/
+  // épaisseur) en haut de l'écran — utilisé pour l'accès direct à la
+  // pompe sans chantier créé au préalable. Les valeurs passées en
+  // paramètre (longueur/diametre/epaisseur) servent alors juste de
+  // valeurs de départ, modifiables ensuite depuis ce panneau.
+  final bool editableSpecs;
 
   const PumpControlScreen({
     super.key,
@@ -35,6 +46,7 @@ class PumpControlScreen extends StatefulWidget {
     required this.longueur,
     required this.diametre,
     required this.qteParPasse,
+    this.editableSpecs = false,
   });
 
   @override
@@ -53,6 +65,12 @@ class _PumpControlScreenState extends State<PumpControlScreen>
 
   // Vitesse tracteur max réglable — même principe.
   static const double _vitesseMax = 3; // m/min
+
+  // Vitesse de référence utilisée pour calculer un débit/vitesse
+  // conseillés à partir des specs (mode direct/editableSpecs uniquement).
+  // Point de départ du calcul géométrique — voir
+  // _recalculerDebitVitesseConseilles().
+  static const double _vitesseBaseConseillee = 1.0; // m/min
 
   // ── Connexion Pi ──────────────────────────────
   bool _piConnected = false;
@@ -153,6 +171,38 @@ class _PumpControlScreenState extends State<PumpControlScreen>
       );
     } catch (e) {
       print("Erreur récupération/partage vidéo : $e");
+    }
+  }
+
+  // ── Inspection caméra : enregistrement timelapse manuel, indépendant ──
+  // du cycle de passe. Réutilise les mêmes endpoints /video/start et
+  // /video/stop que l'enregistrement automatique lié à la passe
+  // (_videoRecording), mais déclenché/arrêté à la main par l'opérateur
+  // via le bouton dans l'AppBar. Un seul enregistrement à la fois côté
+  // Pi caméra (le serveur renvoie 409 sinon) : on évite donc de
+  // chevaucher les deux modes.
+  bool _inspectionRecording = false;
+
+  Future<void> _toggleInspectionRecording() async {
+    if (!_inspectionRecording) {
+      if (_videoRecording) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(_lang.t('pumpCameraAlreadyRecordingMsg')),
+            backgroundColor: Colors.orange,
+            behavior: SnackBarBehavior.floating));
+        return;
+      }
+      setState(() => _inspectionRecording = true);
+      await _startVideoRecording();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(_lang.t('pumpCameraInspectionStartedMsg')),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating));
+      }
+    } else {
+      setState(() => _inspectionRecording = false);
+      await _finalizeAndShareVideo();
     }
   }
 
@@ -269,9 +319,21 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   double _debitCommand   = 0.0;   // 0.0 – _debitMax L/min
   double _vitesseCommand = 0.0;   // 0.0 – _vitesseMax m/min
 
+  // Vrai juste après que _recalculerDebitVitesseConseilles() a rempli le
+  // champ correspondant — affiche un petit avertissement sous le champ.
+  // Repasse à false dès que le client modifie la valeur lui-même (saisie
+  // ou slider), qu'il vienne ou non de la suggestion.
+  bool _debitEstConseille = false;
+  bool _vitesseEstConseillee = false;
+
   // ── Tracteur (moteur 4) — start/stop indépendant de la pompe ──
   bool _tracteurOn = false;
   bool _tracteurSensAvant = true; // true = avant, false = arrière
+  // Le client n'a pas forcément de tracteur physique sur ce chantier
+  // (ex: pose manuelle). Quand false, tout ce qui concerne le tracteur
+  // (bouton marche/arrêt, sens, réglage vitesse m/min) est désactivé et
+  // non interactif — rien n'est envoyé à la Pi pour le moteur 4.
+  bool _hasTracteur = true;
 
   // ── Vidéo timelapse (Pi caméra, port dédié 5002) ──
   // true dès que /video/start a été envoyé pour la passe en cours ;
@@ -340,17 +402,39 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   final FocusNode _debitFocus = FocusNode();
   final FocusNode _vitesseFocus = FocusNode();
 
+  // ── Specs modifiables (mode editableSpecs) ────────────
+  // Initialisées depuis les valeurs passées par le widget, mais
+  // modifiables ensuite via le panneau du haut quand
+  // widget.editableSpecs == true. Tout le reste de l'écran lit ces
+  // champs plutôt que widget.diametre/longueur/epaisseur directement,
+  // pour que le panneau ait un effet immédiat sur les calculs.
+  late double _diametre;
+  late double _longueur;
+  late double _epaisseur;
+  late TextEditingController _diametreCtrl;
+  late TextEditingController _longueurCtrl;
+  late TextEditingController _epaisseurCtrl;
+
+  double get _qteParPasse =>
+      _longueur * (math.pi * _diametre * _epaisseur / 1000);
+
   @override
   void initState() {
     super.initState();
     _lang.addListener(() { if (mounted) setState(() {}); });
-    _metersLeft = widget.longueur;
-    _resinConso = widget.passesDone * widget.qteParPasse;
+    _diametre  = widget.diametre;
+    _longueur  = widget.longueur;
+    _epaisseur = widget.epaisseur;
+    _diametreCtrl  = TextEditingController(text: _diametre.toStringAsFixed(0));
+    _longueurCtrl  = TextEditingController(text: _longueur.toStringAsFixed(1));
+    _epaisseurCtrl = TextEditingController(text: _epaisseur.toStringAsFixed(2));
+    _metersLeft = _longueur;
+    _resinConso = widget.passesDone * _qteParPasse;
     // Initialise le niveau des cuves en tenant compte de ce qui a déjà été
     // consommé sur ce chantier avant l'ouverture de l'écran (cohérent avec
     // l'ancien calcul), le suivi indépendant ne divergera qu'après un
     // premier "Plein" manuel.
-    final priorVolume = widget.passesDone * widget.qteParPasse;
+    final priorVolume = widget.passesDone * _qteParPasse;
     _resineTankRatio = (1 - (priorVolume * _ratioResine) / _resineCapaciteL)
         .clamp(0.0, 1.0);
     _durcisseurTankRatio =
@@ -388,6 +472,9 @@ class _PumpControlScreenState extends State<PumpControlScreen>
     _vitesseFieldCtrl.dispose();
     _debitFocus.dispose();
     _vitesseFocus.dispose();
+    _diametreCtrl.dispose();
+    _longueurCtrl.dispose();
+    _epaisseurCtrl.dispose();
     _heroAnimController.dispose();
     super.dispose();
   }
@@ -400,7 +487,10 @@ class _PumpControlScreenState extends State<PumpControlScreen>
       return;
     }
     final clamped = parsed.clamp(0.0, _debitMax);
-    setState(() => _debitCommand = clamped);
+    setState(() {
+      _debitCommand = clamped;
+      _debitEstConseille = false;
+    });
     _debitFieldCtrl.text = clamped.toStringAsFixed(2);
     if (_isPumpOn) {
       _sendCmd('SPEED12=${_debitToPwmPercent()}');
@@ -410,17 +500,59 @@ class _PumpControlScreenState extends State<PumpControlScreen>
 
   // Applique une valeur de vitesse saisie manuellement (clavier)
   void _applyVitesseInput(String text) {
+    if (!_hasTracteur) return;
     final parsed = double.tryParse(text.replaceAll(',', '.'));
     if (parsed == null) {
       _vitesseFieldCtrl.text = _vitesseCommand.toStringAsFixed(2);
       return;
     }
     final clamped = parsed.clamp(0.0, _vitesseMax);
-    setState(() => _vitesseCommand = clamped);
+    setState(() {
+      _vitesseCommand = clamped;
+      _vitesseEstConseillee = false;
+    });
     _vitesseFieldCtrl.text = clamped.toStringAsFixed(2);
     if (_tracteurOn) {
       _sendCmd('SPEED4=${_vitesseToPwmPercent()}');
     }
+  }
+
+  // Calcule un débit et une vitesse tracteur conseillés à partir des
+  // specs actuelles (diamètre/longueur/épaisseur), et les applique
+  // directement dans les champs réglables. Utile seulement en mode
+  // direct (editableSpecs) — déclenché par le bouton dédié dans
+  // _buildEditableSpecsPanel (pas automatique, l'utilisateur valide).
+  //
+  // Principe géométrique (même formule que _qteParPasse) : pour garder
+  // une épaisseur constante le long de la passe,
+  //   débit (L/min) = vitesse (m/min) × π × diamètre(mm) × épaisseur(mm) / 1000
+  // On part d'une vitesse de référence (_vitesseBaseConseillee) et on en
+  // déduit le débit ; si ce débit dépasse la capacité de la pompe
+  // (_debitMax), on plafonne le débit et on réduit la vitesse en
+  // conséquence pour garder l'épaisseur cible correcte plutôt que de
+  // dépasser le matériel.
+  void _recalculerDebitVitesseConseilles() {
+    final ringFactor = math.pi * _diametre * _epaisseur / 1000; // L par mètre
+    if (ringFactor <= 0) return;
+
+    double vitesse = _vitesseBaseConseillee;
+    double debit = vitesse * ringFactor;
+
+    if (debit > _debitMax) {
+      debit = _debitMax;
+      vitesse = debit / ringFactor;
+    }
+    vitesse = vitesse.clamp(0.0, _vitesseMax);
+    // Recalcule le débit si la vitesse a dû être replafonnée par
+    // _vitesseMax (cas limite : diamètre/épaisseur très faibles).
+    debit = (vitesse * ringFactor).clamp(0.0, _debitMax);
+
+    _applyDebitInput(debit.toStringAsFixed(2));
+    _applyVitesseInput(vitesse.toStringAsFixed(2)); // no-op si !_hasTracteur
+    setState(() {
+      _debitEstConseille = true;
+      _vitesseEstConseillee = _hasTracteur;
+    });
   }
 
   void _startTimer() {
@@ -454,7 +586,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
         if (_isPumpOn && _vitesse4Reel > 0) {
           final delta = _vitesse4Reel / 60; // 1 seconde → m
           _metersDone += delta;
-          _metersLeft  = (widget.longueur - _metersDone).clamp(0, widget.longueur);
+          _metersLeft  = (_longueur - _metersDone).clamp(0, _longueur);
           _timeElapsed += 1 / 60;
 
           // ── Échantillon pour la courbe épaisseur/métrage ──
@@ -463,7 +595,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
           // pour éviter une division par zéro / valeur aberrante.
           if (_vitesse4Reel > 0.01) {
             final epaisseurInstant = double.parse(
-                ((_debitReel / _vitesse4Reel) * 1000 / (math.pi * widget.diametre))
+                ((_debitReel / _vitesse4Reel) * 1000 / (math.pi * _diametre))
                     .toStringAsFixed(2));
             _thicknessSamples.add(FlSpot(_metersDone, epaisseurInstant));
           }
@@ -535,7 +667,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
     // 3. Vidéo timelapse : démarrée une seule fois pour toute la passe.
     //    Si l'opérateur coupe/remet la pompe plusieurs fois pendant la
     //    même passe, l'enregistrement continue déjà, on ne relance pas.
-    if (!_videoRecording) {
+    if (!_videoRecording && !_inspectionRecording) {
       _videoRecording = true;
       _startVideoRecording();
     }
@@ -550,6 +682,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   // Arduino) ; pas de contrôle de niveau résine/durcisseur, non
   // pertinent pour le tracteur.
   void _toggleTracteur() {
+    if (!_hasTracteur) return;
     if (!_tracteurOn && (!_piConnected || !_arduinoConnected)) {
       final message = !_piConnected
           ? _lang.t('pumpPiUnreachableMsg')
@@ -578,7 +711,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   // pourrait forcer brutalement sur la mécanique. Il faut d'abord
   // l'arrêter.
   void _setTracteurSens(bool avant) {
-    if (_tracteurOn || avant == _tracteurSensAvant) return;
+    if (!_hasTracteur || _tracteurOn || avant == _tracteurSensAvant) return;
     setState(() => _tracteurSensAvant = avant);
     _sendCmd(avant ? 'TRACT_SENS_AVANT' : 'TRACT_SENS_ARRIERE');
   }
@@ -626,7 +759,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
     final smoothed = _withZeroStart(_smoothedSpots(_thicknessSamples));
     if (smoothed.length < 2) return [];
 
-    final target = math.max(30, (widget.longueur / 0.1).ceil());
+    final target = math.max(30, (_longueur / 0.1).ceil());
     if (smoothed.length <= target) {
       return smoothed
           .map((s) => [
@@ -705,7 +838,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
     final smoothed = _withZeroStart(_smoothedSpots(_thicknessSamples));
     final hasData = smoothed.length >= 2;
     final maxX = hasData ? smoothed.last.x : 1.0;
-    final targetEpaisseur = widget.epaisseur;
+    final targetEpaisseur = _epaisseur;
     final maxDataY = hasData
         ? smoothed.map((s) => s.y).reduce((a, b) => a > b ? a : b)
         : 0.0;
@@ -911,6 +1044,10 @@ class _PumpControlScreenState extends State<PumpControlScreen>
         _videoRecording = false;
         _stopVideoRecording();
       }
+      if (_inspectionRecording) {
+        _inspectionRecording = false;
+        _stopVideoRecording();
+      }
       Navigator.pop(context, false); // retour sans valider la passe
     }
   }
@@ -1051,6 +1188,90 @@ class _PumpControlScreenState extends State<PumpControlScreen>
     if (confirm == true) onConfirm();
   }
 
+  // ── Panneau specs modifiables (accès direct sans chantier) ──
+  // Permet de saisir/ajuster diamètre, longueur et épaisseur cible
+  // directement sur cet écran, sans être passé par un chantier créé au
+  // préalable. Toute modification met à jour _diametre/_longueur/
+  // _epaisseur, dont dépendent déjà tous les calculs de l'écran
+  // (progression, badge DN, courbe épaisseur, qté/passe...).
+  Widget _buildEditableSpecsPanel() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D0D0D),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.amber.withOpacity(0.25))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.bolt, color: Colors.amber, size: 16),
+          const SizedBox(width: 6),
+          Text(_lang.t('pumpControlSpecsTitle'),
+            style: TextStyle(color: Colors.grey[400], fontSize: 9,
+              fontWeight: FontWeight.w900, letterSpacing: 1.3)),
+        ]),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(child: _specField(_diametreCtrl, _lang.t('pumpControlDiametreLabel'),
+            (v) => setState(() => _diametre = double.tryParse(v) ?? _diametre))),
+          const SizedBox(width: 8),
+          Expanded(child: _specField(_longueurCtrl, _lang.t('pumpControlLongueurLabel'),
+            (v) => setState(() => _longueur = double.tryParse(v) ?? _longueur))),
+          const SizedBox(width: 8),
+          Expanded(child: _specField(_epaisseurCtrl, _lang.t('pumpControlEpaisseurLabel'),
+            (v) => setState(() => _epaisseur = double.tryParse(v) ?? _epaisseur))),
+        ]),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: _recalculerDebitVitesseConseilles,
+            icon: const Icon(Icons.calculate_outlined, size: 16, color: Colors.amber),
+            label: Text(_lang.t('pumpControlSuggestDebitVitesseBtn'),
+              style: TextStyle(color: Colors.amber[200], fontSize: 11,
+                fontWeight: FontWeight.w800)),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              side: BorderSide(color: Colors.amber.withOpacity(0.4)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10))),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(children: [
+          Text(_lang.t('pumpControlQtePasseEstimeeLabel'),
+            style: TextStyle(color: Colors.grey[500], fontSize: 10)),
+          Text('${_qteParPasse.toStringAsFixed(2)} L',
+            style: const TextStyle(color: Color(0xFF22D3EE),
+              fontWeight: FontWeight.w900, fontSize: 12)),
+        ]),
+      ]),
+    );
+  }
+
+  Widget _specField(TextEditingController ctrl, String label,
+      void Function(String) onChanged) {
+    return TextField(
+      controller: ctrl,
+      onChanged: onChanged,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      style: const TextStyle(color: Colors.white, fontSize: 12),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: TextStyle(color: Colors.grey[500], fontSize: 10),
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        filled: true, fillColor: Colors.black.withOpacity(0.4),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: Colors.white.withOpacity(0.08))),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: Colors.white.withOpacity(0.08))),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Colors.amber, width: 1.5))),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final resinName = widget.resinType == 'spraycoat_plus'
@@ -1084,7 +1305,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                     fontSize: 12)),
           ]),
           Row(children: [
-            _headerBadge('DN${widget.diametre.toInt()}',
+            _headerBadge('DN${_diametre.toInt()}',
                 const Color(0xFF22D3EE)),
             const SizedBox(width: 6),
             _headerBadge(resinName, Colors.white),
@@ -1094,6 +1315,16 @@ class _PumpControlScreenState extends State<PumpControlScreen>
           ]),
         ]),
         actions: [
+          IconButton(
+            icon: Icon(
+              _inspectionRecording ? Icons.videocam : Icons.camera_alt_outlined,
+              color: _inspectionRecording ? Colors.redAccent : Colors.white70,
+              size: 20),
+            tooltip: _inspectionRecording
+              ? _lang.t('pumpCameraStopInspectionTooltip')
+              : _lang.t('pumpCameraInspectionTooltip'),
+            onPressed: _toggleInspectionRecording,
+          ),
           IconButton(
             icon: const Icon(Icons.bug_report, color: Colors.white70, size: 20),
             tooltip: _lang.t('pumpDebugTooltip'),
@@ -1143,6 +1374,9 @@ class _PumpControlScreenState extends State<PumpControlScreen>
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(14),
         child: Column(children: [
+          // ── Specs modifiables (accès direct sans chantier) ──
+          if (widget.editableSpecs) _buildEditableSpecsPanel(),
+          if (widget.editableSpecs) const SizedBox(height: 14),
           // ── Avancement passe ────────────────────
           _buildProgressBar(),
           const SizedBox(height: 14),
@@ -1165,8 +1399,8 @@ class _PumpControlScreenState extends State<PumpControlScreen>
 
   // ── Barre de progression passe ─────────────────
   Widget _buildProgressBar() {
-    final progress = widget.longueur > 0
-        ? (_metersDone / widget.longueur).clamp(0.0, 1.0)
+    final progress = _longueur > 0
+        ? (_metersDone / _longueur).clamp(0.0, 1.0)
         : 0.0;
     final remainingMins =
         _vitesse4Reel > 0 ? _metersLeft / _vitesse4Reel : 0.0;
@@ -1310,7 +1544,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                 Positioned.fill(
                   child: Center(
                     child: Text(
-                        '${_metersDone.toStringAsFixed(1).replaceAll('.', ',')} / ${widget.longueur.toStringAsFixed(1).replaceAll('.', ',')} m',
+                        '${_metersDone.toStringAsFixed(1).replaceAll('.', ',')} / ${_longueur.toStringAsFixed(1).replaceAll('.', ',')} m',
                         style: const TextStyle(
                             color: Colors.white,
                             fontSize: 10,
@@ -1337,11 +1571,11 @@ class _PumpControlScreenState extends State<PumpControlScreen>
           // ── Détails secondaires, en mini-cartes à icônes ──
           Row(children: [
             Expanded(
-                child: _statCard(Icons.timer_outlined, 'Temps écoulé',
+                child: _statCard(Icons.timer_outlined, _lang.t('pumpControlTimeElapsedLabel'),
                     _fmt(_timeElapsed), Colors.white)),
             const SizedBox(width: 8),
             Expanded(
-                child: _statCard(Icons.water_drop_outlined, 'Résine consommée',
+                child: _statCard(Icons.water_drop_outlined, _lang.t('pumpControlResinConsumedLabel'),
                     '${_resinConso.toStringAsFixed(2)} L', Colors.purpleAccent)),
           ]),
         ]),
@@ -1396,6 +1630,40 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                   fontWeight: FontWeight.w900,
                   letterSpacing: 1.5)),
         ]),
+        const SizedBox(height: 12),
+
+        // ── Le client a-t-il un tracteur sur ce chantier ? ──
+        // Si non, tout ce qui concerne le tracteur (bouton marche/
+        // arrêt, sens, réglage vitesse m/min) est désactivé plus bas.
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.white.withOpacity(0.08))),
+          child: Row(children: [
+            Icon(Icons.agriculture_outlined,
+                color: _hasTracteur ? const Color(0xFFD4A574) : Colors.grey[600],
+                size: 16),
+            const SizedBox(width: 8),
+            Expanded(child: Text(_lang.t('pumpControlTracteurAvailableLabel'),
+                style: TextStyle(color: Colors.grey[300], fontSize: 11,
+                    fontWeight: FontWeight.w700))),
+            Switch(
+              value: _hasTracteur,
+              activeColor: const Color(0xFFD4A574),
+              onChanged: (v) => setState(() {
+                _hasTracteur = v;
+                // Si on désactive le tracteur alors qu'il tournait
+                // encore, on l'arrête proprement côté Pi.
+                if (!v && _tracteurOn) {
+                  _tracteurOn = false;
+                  _sendCmd('TRACT_OFF');
+                }
+              }),
+            ),
+          ]),
+        ),
         const SizedBox(height: 14),
 
         // ── Bouton On/Off moteur ────────────────
@@ -1476,104 +1744,137 @@ class _PumpControlScreenState extends State<PumpControlScreen>
 
         const SizedBox(height: 10),
 
-        // ── Bouton On/Off tracteur (moteur 4, indépendant de la pompe) ──
-        Builder(builder: (context) {
-          final notConnected = !_piConnected || !_arduinoConnected;
-          final startBlocked = !_tracteurOn && notConnected;
-          final blockedLabel = !_piConnected
-              ? _lang.t('pumpPiUnreachableShort')
-              : _lang.t('pumpArduinoDisconnectedShort');
-          return GestureDetector(
-            onTap: _toggleTracteur,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: double.infinity,
-              height: 54,
-              decoration: BoxDecoration(
-                color: startBlocked
-                    ? Colors.white.withOpacity(0.03)
-                    : (_tracteurOn
-                        ? Colors.red.withOpacity(0.15)
-                        : Colors.green.withOpacity(0.12)),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                    color: startBlocked
-                        ? Colors.white.withOpacity(0.1)
-                        : (_tracteurOn
-                            ? Colors.red.withOpacity(0.6)
-                            : Colors.green.withOpacity(0.5)),
-                    width: 1.5),
-                boxShadow: startBlocked
-                    ? []
-                    : [
-                        BoxShadow(
-                            color: (_tracteurOn ? Colors.red : Colors.green)
-                                .withOpacity(0.2),
-                            blurRadius: 12,
-                            spreadRadius: 0),
-                      ],
-              ),
-              child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                Icon(
-                  startBlocked
-                      ? Icons.lock_outline
-                      : (_tracteurOn ? Icons.stop_circle : Icons.play_circle),
-                  color: startBlocked
-                      ? Colors.grey[600]
-                      : (_tracteurOn ? Colors.redAccent : Colors.greenAccent),
-                  size: 22,
+        // ── Bloc tracteur : bouton marche/arrêt + sens ──
+        // Grisé, non interactif et cadenassé si le client n'a pas de
+        // tracteur sur ce chantier (voir le switch "Tracteur disponible"
+        // plus haut).
+        _lockableSection(
+          locked: !_hasTracteur,
+          child: Column(children: [
+              // ── Bouton On/Off tracteur (moteur 4, indépendant de la pompe) ──
+              Builder(builder: (context) {
+                final notConnected = !_piConnected || !_arduinoConnected;
+                final startBlocked = !_tracteurOn && notConnected;
+                final blockedLabel = !_piConnected
+                    ? _lang.t('pumpPiUnreachableShort')
+                    : _lang.t('pumpArduinoDisconnectedShort');
+                return GestureDetector(
+                  onTap: _toggleTracteur,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: double.infinity,
+                    height: 54,
+                    decoration: BoxDecoration(
+                      color: startBlocked
+                          ? Colors.white.withOpacity(0.03)
+                          : (_tracteurOn
+                              ? Colors.red.withOpacity(0.15)
+                              : Colors.green.withOpacity(0.12)),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                          color: startBlocked
+                              ? Colors.white.withOpacity(0.1)
+                              : (_tracteurOn
+                                  ? Colors.red.withOpacity(0.6)
+                                  : Colors.green.withOpacity(0.5)),
+                          width: 1.5),
+                      boxShadow: startBlocked
+                          ? []
+                          : [
+                              BoxShadow(
+                                  color: (_tracteurOn ? Colors.red : Colors.green)
+                                      .withOpacity(0.2),
+                                  blurRadius: 12,
+                                  spreadRadius: 0),
+                            ],
+                    ),
+                    child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                      Icon(
+                        startBlocked
+                            ? Icons.lock_outline
+                            : (_tracteurOn ? Icons.stop_circle : Icons.play_circle),
+                        color: startBlocked
+                            ? Colors.grey[600]
+                            : (_tracteurOn ? Colors.redAccent : Colors.greenAccent),
+                        size: 22,
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          startBlocked
+                              ? blockedLabel
+                              : (_tracteurOn
+                                  ? _lang.t('pumpStopTracteurBtn')
+                                  : _lang.t('pumpStartTracteurBtn')),
+                          style: TextStyle(
+                            color: startBlocked
+                                ? Colors.grey[500]
+                                : (_tracteurOn ? Colors.redAccent : Colors.greenAccent),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 0.5),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ]),
+                ),
+              );
+              }),
+
+              const SizedBox(height: 10),
+
+              // ── Sélecteur de sens tracteur (avant/arrière) ──
+              // Désactivé tant que le tracteur tourne (voir _setTracteurSens).
+              Row(children: [
+                Expanded(
+                  child: _tracteurSensButton(
+                    label: _lang.t('pumpDirForwardLabel'),
+                    icon: Icons.arrow_upward,
+                    selected: _tracteurSensAvant,
+                    onTap: () => _setTracteurSens(true),
+                  ),
                 ),
                 const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    startBlocked
-                        ? blockedLabel
-                        : (_tracteurOn
-                            ? _lang.t('pumpStopTracteurBtn')
-                            : _lang.t('pumpStartTracteurBtn')),
-                    style: TextStyle(
-                      color: startBlocked
-                          ? Colors.grey[500]
-                          : (_tracteurOn ? Colors.redAccent : Colors.greenAccent),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.5),
-                  overflow: TextOverflow.ellipsis,
+                Expanded(
+                  child: _tracteurSensButton(
+                    label: _lang.t('pumpDirBackwardLabel'),
+                    icon: Icons.arrow_downward,
+                    selected: !_tracteurSensAvant,
+                    onTap: () => _setTracteurSens(false),
+                  ),
                 ),
-              ),
+              ]),
             ]),
-          ),
-        );
-        }),
-
-        const SizedBox(height: 10),
-
-        // ── Sélecteur de sens tracteur (avant/arrière) ──
-        // Désactivé tant que le tracteur tourne (voir _setTracteurSens).
-        Row(children: [
-          Expanded(
-            child: _tracteurSensButton(
-              label: _lang.t('pumpDirForwardLabel'),
-              icon: Icons.arrow_upward,
-              selected: _tracteurSensAvant,
-              onTap: () => _setTracteurSens(true),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _tracteurSensButton(
-              label: _lang.t('pumpDirBackwardLabel'),
-              icon: Icons.arrow_downward,
-              selected: !_tracteurSensAvant,
-              onTap: () => _setTracteurSens(false),
-            ),
-          ),
-        ]),
+        ),
       ]),
     );
+  }
+
+  // Enveloppe un bloc de contrôle pour le griser, le rendre non cliquable,
+  // et afficher un cadenas centré par-dessus quand `locked` est vrai —
+  // pour que ce soit visuellement clair qu'il est désactivé volontairement
+  // (ex : pas de tracteur sur ce chantier) et pas juste indisponible
+  // temporairement (comme un défaut de connexion Pi/Arduino).
+  Widget _lockableSection({required Widget child, required bool locked}) {
+    return Stack(alignment: Alignment.center, children: [
+      Opacity(
+        opacity: locked ? 0.35 : 1.0,
+        child: IgnorePointer(ignoring: locked, child: child),
+      ),
+      if (locked)
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.55),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withOpacity(0.1)),
+          ),
+          child: Icon(Icons.lock_outline, color: Colors.grey[400], size: 22),
+        ),
+    ]);
   }
 
   // Segment de sélection du sens du tracteur (avant/arrière). Grisé et
@@ -1712,6 +2013,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                 inactiveColor: Colors.grey[800],
                 onChanged: (val) => setState(() {
                   _debitCommand = val;
+                  _debitEstConseille = false;
                   if (!_debitFocus.hasFocus) {
                     _debitFieldCtrl.text = val.toStringAsFixed(2);
                   }
@@ -1736,12 +2038,21 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                 },
               ),
             ),
+            if (_debitEstConseille) ...[
+              const SizedBox(height: 4),
+              Text(_lang.t('pumpDebitConseilleMsg'),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      color: Colors.amber[200], fontSize: 8, height: 1.3)),
+            ],
           ])),
 
           const SizedBox(width: 16),
 
           // Vitesse
-          Expanded(child: Column(children: [
+          Expanded(child: _lockableSection(
+            locked: !_hasTracteur,
+            child: Column(children: [
             Text(_lang.t('pumpMeasuredLabel'),
                 style: TextStyle(
                     color: Colors.grey[600],
@@ -1766,6 +2077,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
               child: TextField(
                 controller: _vitesseFieldCtrl,
                 focusNode: _vitesseFocus,
+                enabled: _hasTracteur,
                 textAlign: TextAlign.center,
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
@@ -1804,8 +2116,9 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                 divisions: (_vitesseMax * 100).round(),
                 activeColor: const Color(0xFFD4A574),
                 inactiveColor: Colors.grey[800],
-                onChanged: (val) => setState(() {
+                onChanged: !_hasTracteur ? null : (val) => setState(() {
                   _vitesseCommand = val;
+                  _vitesseEstConseillee = false;
                   if (!_vitesseFocus.hasFocus) {
                     _vitesseFieldCtrl.text = val.toStringAsFixed(2);
                   }
@@ -1818,7 +2131,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                     }
                   });
                 }),
-                onChangeEnd: (val) {
+                onChangeEnd: !_hasTracteur ? null : (val) {
                   _vitesseSendDebounce?.cancel();
                   if (_tracteurOn) {
                     _sendCmd('SPEED4=${_vitesseToPwmPercent()}');
@@ -1826,7 +2139,15 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                 },
               ),
             ),
-          ])),
+            if (_vitesseEstConseillee) ...[
+              const SizedBox(height: 4),
+              Text(_lang.t('pumpVitesseConseilleeMsg'),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      color: Colors.amber[200], fontSize: 8, height: 1.3)),
+            ],
+          ]),
+          )),
         ]),
       ]),
     );
@@ -2002,7 +2323,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                   child: Column(
                     children: [
                       PumpLoadGauge(
-                          label: 'Pompe 1',
+                          label: '${_lang.t('pumpControlPumpLabel')} 1',
                           percent: _consoMoteurA,
                           color: Colors.white70),
                     ],
@@ -2022,7 +2343,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                   child: Column(
                     children: [
                       PumpLoadGauge(
-                          label: 'Pompe 2', 
+                          label: '${_lang.t('pumpControlPumpLabel')} 2', 
                           percent: _consoMoteurB,
                           color: Colors.white70),
                     ],
