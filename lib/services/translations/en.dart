@@ -1558,8 +1558,8 @@ const Map<String, String> en = {
 'pumpControlPumpLabel': "Pump",
 'pumpControlTracteurAvailableLabel': "Tractor available on this job",
 'pumpCameraInspectionTooltip': "Camera inspection",
-'pumpCameraInspectionTooltip': "Camera inspection",
 'pumpCameraStopInspectionTooltip': "Stop inspection",
 'pumpCameraAlreadyRecordingMsg': "Video recording is already in progress for this pass",
 'pumpCameraInspectionStartedMsg': "Inspection recording started",
+'pumpControlManualVitesseLabel': "Feed speed",
 };

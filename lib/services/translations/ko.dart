@@ -1565,8 +1565,8 @@ const Map<String, String> ko = {
 'pumpControlPumpLabel': "펌프",
 'pumpControlTracteurAvailableLabel': "이 현장에서 트랙터 사용 가능",
 'pumpCameraInspectionTooltip': "카메라 검사",
-'pumpCameraInspectionTooltip': "카메라 검사",
 'pumpCameraStopInspectionTooltip': "검사 중지",
 'pumpCameraAlreadyRecordingMsg': "이 패스에 대한 비디오 녹화가 이미 진행 중입니다",
 'pumpCameraInspectionStartedMsg': "검사 녹화가 시작되었습니다",
+'pumpControlManualVitesseLabel': "이송 속도",
 };

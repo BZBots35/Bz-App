@@ -1558,8 +1558,8 @@ const Map<String, String> pt = {
 'pumpControlPumpLabel': "Bomba",
 'pumpControlTracteurAvailableLabel': "Trator disponível nesta obra",
 'pumpCameraInspectionTooltip': "Inspeção por câmara",
-'pumpCameraInspectionTooltip': "Inspeção por câmara",
 'pumpCameraStopInspectionTooltip': "Parar inspeção",
 'pumpCameraAlreadyRecordingMsg': "Já está a decorrer uma gravação de vídeo para esta passe",
 'pumpCameraInspectionStartedMsg': "Gravação de inspeção iniciada",
+'pumpControlManualVitesseLabel': "Velocidade de avanço",
 };

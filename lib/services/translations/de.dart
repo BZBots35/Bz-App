@@ -1557,8 +1557,8 @@ const Map<String, String> de = {
 'pumpControlPumpLabel': "Pumpe",
 'pumpControlTracteurAvailableLabel': "Traktor auf dieser Baustelle verfügbar",
 'pumpCameraInspectionTooltip': "Inspección por cámara",
-'pumpCameraInspectionTooltip': "Kameraüberprüfung",
 'pumpCameraStopInspectionTooltip': "Überprüfung stoppen",
 'pumpCameraAlreadyRecordingMsg': "Für diesen Durchgang läuft bereits eine Videoaufnahme",
 'pumpCameraInspectionStartedMsg': "Inspektionsaufnahme gestartet",
+'pumpControlManualVitesseLabel': "Vorschubgeschwindigkeit",
 };

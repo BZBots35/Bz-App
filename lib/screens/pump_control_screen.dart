@@ -8,7 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:appwrite/models.dart' as models;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
+import 'package:gal/gal.dart';
 import 'pump_debug_screen.dart';
 import '../services/lang_service.dart';
 import '../services/pump_service.dart';
@@ -144,6 +144,10 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   // Arrête l'enregistrement, récupère le fichier fini depuis la Pi
   // caméra, et ouvre la feuille de partage du téléphone — même flux
   // que sharePdf() dans pump_pdf_service.dart, mais pour la vidéo.
+  // Tente aussi un upload vers Appwrite Storage (voir _service.uploadVideo)
+  // pour que la vidéo reste rattachée au chantier, pas seulement sur le
+  // téléphone qui a fait l'inspection. Best-effort : un échec d'upload
+  // ne bloque jamais le partage local, qui reste la voie principale.
   Future<void> _finalizeAndShareVideo() async {
     try {
       await http
@@ -165,10 +169,33 @@ class _PumpControlScreenState extends State<PumpControlScreen>
       final file = File('${tempDir.path}/$filename');
       await file.writeAsBytes(resp.bodyBytes);
 
-      await Share.shareXFiles(
-        [XFile(file.path)],
-        text: _lang.t('pumpVideoShareText'),
-      );
+      // Sauvegarde directe dans la galerie du téléphone (album dédié),
+      // best-effort : un échec ne doit jamais bloquer le partage
+      // ci-dessous, qui reste la voie principale.
+      try {
+        final hasAccess = await Gal.hasAccess(toAlbum: true);
+        if (!hasAccess) {
+          await Gal.requestAccess(toAlbum: true);
+        }
+        await Gal.putVideo(file.path, album: 'BZBots Pompe');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(_lang.t('pumpVideoSavedToGalleryMsg')),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating));
+        }
+      } catch (e) {
+        print("Erreur sauvegarde galerie : $e");
+      }
+
+      // Upload Appwrite en tâche de fond — ne bloque pas le partage
+      // ci-dessous, et son échec éventuel est silencieux (voir
+      // PumpService.uploadVideo).
+      unawaited(_pumpService.uploadVideo(resp.bodyBytes, filename).then((fileId) {
+        if (fileId != null) {
+          _pumpService.appendVideoToCanalisation(widget.canalisationDoc.$id, fileId);
+        }
+      }));
     } catch (e) {
       print("Erreur récupération/partage vidéo : $e");
     }
@@ -377,6 +404,16 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   double _tempCouverture2         = 20.0;
   double _debitReel               = 0.0;
   double _vitesse4Reel            = 0.0;
+  // ── Vitesse manuelle (mode sans tracteur) ──────────────────
+  // Quand _hasTracteur est false, aucune télémétrie vitesse4 réelle
+  // n'arrive (le moteur 4 ne tourne pas) : _vitesse4Reel reste à 0, ce
+  // qui bloquait tout échantillonnage de la courbe épaisseur/métrage
+  // (garde-fou `> 0.01` plus bas). On demande donc à l'opérateur de
+  // saisir à la main la vitesse d'avancement réelle (m/min) pour que le
+  // rapport ait quand même une courbe exploitable.
+  final _manualVitesseCtrl = TextEditingController(text: '0');
+  double _manualVitesse = 0.0;
+  double get _vitesseForCalc => _hasTracteur ? _vitesse4Reel : _manualVitesse;
 
   // ── Courbe épaisseur appliquée en fonction du métrage ──
   // Un point ajouté à chaque tick où la pompe avance réellement (vitesse
@@ -475,6 +512,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
     _diametreCtrl.dispose();
     _longueurCtrl.dispose();
     _epaisseurCtrl.dispose();
+    _manualVitesseCtrl.dispose();
     _heroAnimController.dispose();
     super.dispose();
   }
@@ -583,8 +621,11 @@ class _PumpControlScreenState extends State<PumpControlScreen>
         // ── Avancement tracteur — basé sur la vitesse RÉELLE mesurée ──
         // (pas la consigne : si la pompe n'avance pas vraiment à la
         // vitesse demandée, la barre de progression doit le refléter)
-        if (_isPumpOn && _vitesse4Reel > 0) {
-          final delta = _vitesse4Reel / 60; // 1 seconde → m
+        // Si pas de tracteur, on retombe sur la vitesse saisie à la main
+        // (voir _vitesseForCalc) plutôt que sur la télémétrie, toujours
+        // à 0 dans ce cas.
+        if (_isPumpOn && _vitesseForCalc > 0) {
+          final delta = _vitesseForCalc / 60; // 1 seconde → m
           _metersDone += delta;
           _metersLeft  = (_longueur - _metersDone).clamp(0, _longueur);
           _timeElapsed += 1 / 60;
@@ -593,9 +634,9 @@ class _PumpControlScreenState extends State<PumpControlScreen>
           // Basé sur les mesures RÉELLES (débit et vitesse mesurés), pas
           // sur la consigne — on ignore si la vitesse mesurée est ~nulle
           // pour éviter une division par zéro / valeur aberrante.
-          if (_vitesse4Reel > 0.01) {
+          if (_vitesseForCalc > 0.01) {
             final epaisseurInstant = double.parse(
-                ((_debitReel / _vitesse4Reel) * 1000 / (math.pi * _diametre))
+                ((_debitReel / _vitesseForCalc) * 1000 / (math.pi * _diametre))
                     .toStringAsFixed(2));
             _thicknessSamples.add(FlSpot(_metersDone, epaisseurInstant));
           }
@@ -1403,7 +1444,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
         ? (_metersDone / _longueur).clamp(0.0, 1.0)
         : 0.0;
     final remainingMins =
-        _vitesse4Reel > 0 ? _metersLeft / _vitesse4Reel : 0.0;
+        _vitesseForCalc > 0 ? _metersLeft / _vitesseForCalc : 0.0;
 
     return AnimatedBuilder(
       animation: _heroAnimController,
@@ -1664,6 +1705,47 @@ class _PumpControlScreenState extends State<PumpControlScreen>
             ),
           ]),
         ),
+        if (!_hasTracteur) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.3),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.amber.withOpacity(0.25))),
+            child: Row(children: [
+              Icon(Icons.speed, color: Colors.amber[200], size: 16),
+              const SizedBox(width: 8),
+              Expanded(child: Text(_lang.t('pumpControlManualVitesseLabel'),
+                  style: TextStyle(color: Colors.grey[300], fontSize: 11,
+                      fontWeight: FontWeight.w700))),
+              SizedBox(
+                width: 70,
+                child: TextField(
+                  controller: _manualVitesseCtrl,
+                  textAlign: TextAlign.center,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                      isDense: true,
+                      suffixText: 'm/min',
+                      suffixStyle: TextStyle(color: Colors.grey[500], fontSize: 9),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      filled: true,
+                      fillColor: Colors.black.withOpacity(0.4),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide(color: Colors.white.withOpacity(0.08))),
+                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide(color: Colors.white.withOpacity(0.08))),
+                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(color: Colors.amber, width: 1.5))),
+                  onChanged: (v) => setState(() =>
+                      _manualVitesse = double.tryParse(v.replaceAll(',', '.')) ?? 0.0),
+                ),
+              ),
+            ]),
+          ),
+        ],
         const SizedBox(height: 14),
 
         // ── Bouton On/Off moteur ────────────────

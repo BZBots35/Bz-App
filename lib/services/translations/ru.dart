@@ -1570,8 +1570,8 @@ const Map<String, String> ru = {
 'pumpControlPumpLabel': "Насос",
 'pumpControlTracteurAvailableLabel': "Трактор доступен на этом объекте",
 'pumpCameraInspectionTooltip': "Осмотр камерой",
-'pumpCameraInspectionTooltip': "Осмотр камерой",
 'pumpCameraStopInspectionTooltip': "Остановить осмотр",
 'pumpCameraAlreadyRecordingMsg': "Видеозапись для этого прохода уже ведется",
 'pumpCameraInspectionStartedMsg': "Запись осмотра начата",
+'pumpControlManualVitesseLabel': "Скорость подачи",
 };

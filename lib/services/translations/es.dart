@@ -1558,4 +1558,5 @@ const Map<String, String> es = {
 'pumpCameraStopInspectionTooltip': "Detener inspección",
 'pumpCameraAlreadyRecordingMsg': "Ya hay una grabación de video en curso para esta pasada",
 'pumpCameraInspectionStartedMsg': "Grabación de inspección iniciada",
+'pumpControlManualVitesseLabel': "Velocidad de avance",
 };

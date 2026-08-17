@@ -1570,8 +1570,8 @@ const Map<String, String> hi = {
 'pumpControlPumpLabel': "पंप",
 'pumpControlTracteurAvailableLabel': "इस साइट पर ट्रैक्टर उपलब्ध है",
 'pumpCameraInspectionTooltip': "कैमरा निरीक्षण",
-'pumpCameraInspectionTooltip': "कैमरा निरीक्षण",
 'pumpCameraStopInspectionTooltip': "निरीक्षण रोकें",
 'pumpCameraAlreadyRecordingMsg': "इस पास के लिए वीडियो रिकॉर्डिंग पहले से चल रही है",
 'pumpCameraInspectionStartedMsg': "निरीक्षण रिकॉर्डिंग शुरू हो गई",
+'pumpControlManualVitesseLabel': "फ़ीड गति",
 };

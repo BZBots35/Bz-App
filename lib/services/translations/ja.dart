@@ -1550,8 +1550,8 @@ const Map<String, String> ja = {
 'pumpControlPumpLabel': "ポンプ",
 'pumpControlTracteurAvailableLabel': "この現場でトラクター利用可能",
 'pumpCameraInspectionTooltip': "カメラ検査",
-'pumpCameraInspectionTooltip': "カメラ検査",
 'pumpCameraStopInspectionTooltip': "検査を停止",
 'pumpCameraAlreadyRecordingMsg': "このパスではすでにビデオ録画が進行中です",
 'pumpCameraInspectionStartedMsg': "検査の録画を開始しました",
+'pumpControlManualVitesseLabel': "送り速度",
 };

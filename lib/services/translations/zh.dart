@@ -1571,8 +1571,8 @@ const Map<String, String> zh = {
 'pumpControlPumpLabel': "泵",
 'pumpControlTracteurAvailableLabel': "此工地可用牵引车",
 'pumpCameraInspectionTooltip': "相机检查",
-'pumpCameraInspectionTooltip': "相机检查",
 'pumpCameraStopInspectionTooltip': "停止检查",
 'pumpCameraAlreadyRecordingMsg': "该单程的视频录制已经在进行中",
 'pumpCameraInspectionStartedMsg': "检查录制已开始",
+'pumpControlManualVitesseLabel': "进给速度",
 };

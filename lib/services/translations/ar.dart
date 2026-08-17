@@ -1558,8 +1558,8 @@ const Map<String, String> ar = {
 'pumpControlPumpLabel': "المضخة",
 'pumpControlTracteurAvailableLabel': "الجرار متاح في هذا المشروع",
 'pumpCameraInspectionTooltip': "فحص بالكاميرا",
-'pumpCameraInspectionTooltip': "فحص بالكاميرا",
 'pumpCameraStopInspectionTooltip': "إيقاف الفحص",
 'pumpCameraAlreadyRecordingMsg': "تسجيل الفيديو جاري بالفعل لهذا المسار",
 'pumpCameraInspectionStartedMsg': "بدء تسجيل الفحص",
+'pumpControlManualVitesseLabel': "سرعة التقدم",
 };

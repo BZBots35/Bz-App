@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:appwrite/appwrite.dart';
 import 'package:appwrite/models.dart' as models;
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -33,9 +34,16 @@ class PumpService {
   static const String databaseId         = '69cd0f11001c948b59e9';
   static const String chantiersTable     = 'pump_chantiers';
   static const String canalisationsTable = 'pump_canalisations';
+  // ⚠️ À CRÉER dans la console Appwrite (Storage → Create bucket), puis
+  // colle l'ID généré ici. Prévoir une taille de fichier max suffisante
+  // pour une vidéo timelapse (ex: 200 Mo) et des permissions cohérentes
+  // avec le reste du projet (au minimum : lecture/écriture pour les
+  // utilisateurs authentifiés).
+  static const String videosBucketId     = 'REMPLACER_PAR_TON_BUCKET_ID';
 
   late Client    _client;
   late Databases _db;
+  late Storage   _storage;
   StreamSubscription<dynamic>? _connectivitySub;
 
   PumpService() {
@@ -43,6 +51,7 @@ class PumpService {
       ..setEndpoint(endpoint)
       ..setProject(projectId);
     _db = Databases(_client);
+    _storage = Storage(_client);
     _startAutoSync();
   }
 
@@ -560,5 +569,59 @@ Future<void> updateChantierEnv(String docId, String tempExt, String meteo) async
       'type': 'deleteCanalisation',
       'data': {'docId': docId},
     });
+  }
+
+  // ── Vidéos timelapse : upload vers Appwrite Storage ──────────
+  // Best-effort volontaire, pas de mode hors-ligne ni de file d'attente
+  // ici (contrairement au reste du service) : une vidéo peut peser
+  // plusieurs dizaines de Mo, la mettre en cache local puis la rejouer
+  // plus tard n'a pas le même profil de coût qu'un JSON de quelques Ko.
+  // Si l'upload échoue (hors-ligne, bucket mal configuré, etc.), la
+  // vidéo reste disponible localement sur le téléphone via le flux de
+  // partage existant — rien n'est perdu, juste pas remonté sur Appwrite.
+  //
+  // Retourne l'ID du fichier créé sur Appwrite, ou null si l'upload a
+  // échoué (auquel cas l'appelant ne doit pas bloquer son propre flux).
+  Future<String?> uploadVideo(Uint8List bytes, String filename) async {
+    try {
+      if (!await _isOnline()) return null;
+      final file = await _storage.createFile(
+        bucketId: videosBucketId,
+        fileId: ID.unique(),
+        file: InputFile.fromBytes(bytes: bytes, filename: filename),
+      );
+      return file.$id;
+    } catch (e) {
+      // Échec silencieux volontaire — voir commentaire ci-dessus.
+      return null;
+    }
+  }
+
+  // Rattache un fichier vidéo déjà uploadé (voir uploadVideo) à une
+  // canalisation, dans un attribut `videoFileIds` (tableau de chaînes).
+  //
+  // ⚠️ NOUVEAU : nécessite un attribut `videoFileIds` (array de String)
+  // sur la collection Appwrite `pump_canalisations`, même logique que
+  // l'attribut `passesData` déjà requis plus haut dans ce fichier.
+  //
+  // Fait une lecture puis une écriture (pas de mode hors-ligne) : si la
+  // canalisation est un document fictif (accès direct pompe sans
+  // chantier, voir pump_direct_screen.dart), le $id ne correspond à
+  // rien côté serveur et cet appel échoue silencieusement — la vidéo
+  // reste néanmoins sur Appwrite Storage, juste non rattachée.
+  Future<void> appendVideoToCanalisation(String docId, String fileId) async {
+    try {
+      if (!await _isOnline()) return;
+      final doc = await _db.getDocument(databaseId: databaseId,
+        collectionId: canalisationsTable, documentId: docId);
+      final current = ((doc.data['videoFileIds'] as List?) ?? [])
+          .map((e) => e.toString()).toList();
+      current.add(fileId);
+      await _db.updateDocument(databaseId: databaseId,
+        collectionId: canalisationsTable, documentId: docId,
+        data: {'videoFileIds': current});
+    } catch (e) {
+      // Échec silencieux volontaire — voir commentaire ci-dessus.
+    }
   }
 }
