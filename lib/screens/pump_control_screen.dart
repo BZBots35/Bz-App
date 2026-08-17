@@ -66,11 +66,11 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   // Vitesse tracteur max réglable — même principe.
   static const double _vitesseMax = 3; // m/min
 
-  // Vitesse de référence utilisée pour calculer un débit/vitesse
-  // conseillés à partir des specs (mode direct/editableSpecs uniquement).
-  // Point de départ du calcul géométrique — voir
-  // _recalculerDebitVitesseConseilles().
-  static const double _vitesseBaseConseillee = 1.0; // m/min
+  // Débit de référence utilisé pour calculer le débit/vitesse conseillés
+  // à partir des specs (mode direct/editableSpecs uniquement). Le débit
+  // est figé à cette valeur, et c'est la vitesse tracteur qui est
+  // déduite — voir _recalculerDebitVitesseConseilles().
+  static const double _debitBaseConseille = 0.25; // L/min
 
   // ── Connexion Pi ──────────────────────────────
   bool _piConnected = false;
@@ -404,16 +404,11 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   double _tempCouverture2         = 20.0;
   double _debitReel               = 0.0;
   double _vitesse4Reel            = 0.0;
-  // ── Vitesse manuelle (mode sans tracteur) ──────────────────
-  // Quand _hasTracteur est false, aucune télémétrie vitesse4 réelle
-  // n'arrive (le moteur 4 ne tourne pas) : _vitesse4Reel reste à 0, ce
-  // qui bloquait tout échantillonnage de la courbe épaisseur/métrage
-  // (garde-fou `> 0.01` plus bas). On demande donc à l'opérateur de
-  // saisir à la main la vitesse d'avancement réelle (m/min) pour que le
-  // rapport ait quand même une courbe exploitable.
-  final _manualVitesseCtrl = TextEditingController(text: '0');
-  double _manualVitesse = 0.0;
-  double get _vitesseForCalc => _hasTracteur ? _vitesse4Reel : _manualVitesse;
+  // Sans tracteur physique sur le chantier (_hasTracteur == false),
+  // aucune télémétrie vitesse4 réelle n'arrive (le moteur 4 ne tourne
+  // pas) : l'avancement/la courbe épaisseur ne sont alors pas
+  // échantillonnés pour cette passe.
+  double get _vitesseForCalc => _hasTracteur ? _vitesse4Reel : 0.0;
 
   // ── Courbe épaisseur appliquée en fonction du métrage ──
   // Un point ajouté à chaque tick où la pompe avance réellement (vitesse
@@ -512,7 +507,6 @@ class _PumpControlScreenState extends State<PumpControlScreen>
     _diametreCtrl.dispose();
     _longueurCtrl.dispose();
     _epaisseurCtrl.dispose();
-    _manualVitesseCtrl.dispose();
     _heroAnimController.dispose();
     super.dispose();
   }
@@ -564,25 +558,21 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   // Principe géométrique (même formule que _qteParPasse) : pour garder
   // une épaisseur constante le long de la passe,
   //   débit (L/min) = vitesse (m/min) × π × diamètre(mm) × épaisseur(mm) / 1000
-  // On part d'une vitesse de référence (_vitesseBaseConseillee) et on en
-  // déduit le débit ; si ce débit dépasse la capacité de la pompe
-  // (_debitMax), on plafonne le débit et on réduit la vitesse en
+  // Le débit est figé à _debitBaseConseille, et on en déduit la vitesse
+  // tracteur nécessaire ; si cette vitesse dépasse la capacité du
+  // tracteur (_vitesseMax), on la plafonne et on réduit le débit en
   // conséquence pour garder l'épaisseur cible correcte plutôt que de
   // dépasser le matériel.
   void _recalculerDebitVitesseConseilles() {
     final ringFactor = math.pi * _diametre * _epaisseur / 1000; // L par mètre
     if (ringFactor <= 0) return;
 
-    double vitesse = _vitesseBaseConseillee;
-    double debit = vitesse * ringFactor;
+    double debit = _debitBaseConseille;
+    double vitesse = debit / ringFactor;
 
-    if (debit > _debitMax) {
-      debit = _debitMax;
-      vitesse = debit / ringFactor;
-    }
     vitesse = vitesse.clamp(0.0, _vitesseMax);
     // Recalcule le débit si la vitesse a dû être replafonnée par
-    // _vitesseMax (cas limite : diamètre/épaisseur très faibles).
+    // _vitesseMax (cas limite : diamètre/épaisseur très grands).
     debit = (vitesse * ringFactor).clamp(0.0, _debitMax);
 
     _applyDebitInput(debit.toStringAsFixed(2));
@@ -591,6 +581,23 @@ class _PumpControlScreenState extends State<PumpControlScreen>
       _debitEstConseille = true;
       _vitesseEstConseillee = _hasTracteur;
     });
+  }
+
+  // Recalcule uniquement la vitesse tracteur, à partir du débit
+  // actuellement réglé par l'opérateur (qui peut différer de
+  // _debitBaseConseille) — contrairement à
+  // _recalculerDebitVitesseConseilles() qui figeait le débit, ce calcul
+  // part du débit choisi par l'utilisateur et en déduit la vitesse
+  // nécessaire pour garder l'épaisseur cible. Bouton dédié à côté du
+  // cadran de vitesse.
+  void _recalculerVitesseDepuisDebit() {
+    if (!_hasTracteur) return;
+    final ringFactor = math.pi * _diametre * _epaisseur / 1000; // L par mètre
+    if (ringFactor <= 0) return;
+
+    final vitesse = (_debitCommand / ringFactor).clamp(0.0, _vitesseMax);
+    _applyVitesseInput(vitesse.toStringAsFixed(2));
+    setState(() => _vitesseEstConseillee = true);
   }
 
   void _startTimer() {
@@ -621,9 +628,6 @@ class _PumpControlScreenState extends State<PumpControlScreen>
         // ── Avancement tracteur — basé sur la vitesse RÉELLE mesurée ──
         // (pas la consigne : si la pompe n'avance pas vraiment à la
         // vitesse demandée, la barre de progression doit le refléter)
-        // Si pas de tracteur, on retombe sur la vitesse saisie à la main
-        // (voir _vitesseForCalc) plutôt que sur la télémétrie, toujours
-        // à 0 dans ce cas.
         if (_isPumpOn && _vitesseForCalc > 0) {
           final delta = _vitesseForCalc / 60; // 1 seconde → m
           _metersDone += delta;
@@ -1683,7 +1687,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: Colors.white.withOpacity(0.08))),
           child: Row(children: [
-            Icon(Icons.agriculture_outlined,
+            Icon(Icons.cable,
                 color: _hasTracteur ? const Color(0xFFD4A574) : Colors.grey[600],
                 size: 16),
             const SizedBox(width: 8),
@@ -1705,47 +1709,6 @@ class _PumpControlScreenState extends State<PumpControlScreen>
             ),
           ]),
         ),
-        if (!_hasTracteur) ...[
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.3),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.amber.withOpacity(0.25))),
-            child: Row(children: [
-              Icon(Icons.speed, color: Colors.amber[200], size: 16),
-              const SizedBox(width: 8),
-              Expanded(child: Text(_lang.t('pumpControlManualVitesseLabel'),
-                  style: TextStyle(color: Colors.grey[300], fontSize: 11,
-                      fontWeight: FontWeight.w700))),
-              SizedBox(
-                width: 70,
-                child: TextField(
-                  controller: _manualVitesseCtrl,
-                  textAlign: TextAlign.center,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  style: const TextStyle(color: Colors.white, fontSize: 13),
-                  decoration: InputDecoration(
-                      isDense: true,
-                      suffixText: 'm/min',
-                      suffixStyle: TextStyle(color: Colors.grey[500], fontSize: 9),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                      filled: true,
-                      fillColor: Colors.black.withOpacity(0.4),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide(color: Colors.white.withOpacity(0.08))),
-                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide(color: Colors.white.withOpacity(0.08))),
-                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                          borderSide: const BorderSide(color: Colors.amber, width: 1.5))),
-                  onChanged: (v) => setState(() =>
-                      _manualVitesse = double.tryParse(v.replaceAll(',', '.')) ?? 0.0),
-                ),
-              ),
-            ]),
-          ),
-        ],
         const SizedBox(height: 14),
 
         // ── Bouton On/Off moteur ────────────────
@@ -2228,6 +2191,43 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                   style: TextStyle(
                       color: Colors.amber[200], fontSize: 8, height: 1.3)),
             ],
+            const SizedBox(height: 6),
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _hasTracteur ? _recalculerVitesseDepuisDebit : null,
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  decoration: BoxDecoration(
+                      color: (_hasTracteur ? Colors.amber : Colors.grey)
+                          .withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                          color: (_hasTracteur ? Colors.amber : Colors.grey)
+                              .withOpacity(0.4))),
+                  child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.calculate_outlined,
+                            size: 13,
+                            color: _hasTracteur
+                                ? Colors.amber[200]
+                                : Colors.grey[600]),
+                        const SizedBox(width: 4),
+                        Text('Recalculer',
+                            style: TextStyle(
+                                color: _hasTracteur
+                                    ? Colors.amber[200]
+                                    : Colors.grey[600],
+                                fontSize: 9,
+                                fontWeight: FontWeight.w800)),
+                      ]),
+                ),
+              ),
+            ),
           ]),
           )),
         ]),

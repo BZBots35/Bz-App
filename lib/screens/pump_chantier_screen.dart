@@ -62,7 +62,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
 
   // Paramètres globaux
   String _resinType     = 'spraycoat_plus';
-  double _epaisseur     = 0.75;
+  double _epaisseur     = 0.8;
   int    _desiredPasses = 4;
 
   // Paramètres environnementaux du chantier
@@ -85,7 +85,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
     _lang.addListener(() { if (mounted) setState(() {}); });
     final d = widget.chantierDoc.data;
     _resinType     = d['resinType']     as String? ?? 'spraycoat_plus';
-    _epaisseur     = double.tryParse(d['epaisseur'] as String? ?? '0.75') ?? 0.75;
+    _epaisseur     = double.tryParse(d['epaisseur'] as String? ?? '0.8') ?? 0.8;
     _desiredPasses = d['desiredPasses'] as int? ?? 4;
     
     // Récupération des données environnementales si elles existent dans Appwrite
