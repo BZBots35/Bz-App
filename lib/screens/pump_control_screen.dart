@@ -1423,8 +1423,10 @@ class _PumpControlScreenState extends State<PumpControlScreen>
           if (widget.editableSpecs) _buildEditableSpecsPanel(),
           if (widget.editableSpecs) const SizedBox(height: 14),
           // ── Avancement passe ────────────────────
-          _buildProgressBar(),
-          const SizedBox(height: 14),
+          // Masqué en mode "sans settings" (editableSpecs) : pas de
+          // canalisation réelle, ce cadre n'a pas de sens dans ce mode.
+          if (!widget.editableSpecs) _buildProgressBar(),
+          if (!widget.editableSpecs) const SizedBox(height: 14),
 
           // ── Contrôles (bouton marche/arrêt) ─────
           _buildOperatorCommands(),

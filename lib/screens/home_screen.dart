@@ -12,7 +12,7 @@ import 'bzlight_presentation_screen.dart';
 import 'admin_panel_screen.dart';
 import 'profile_screen.dart';
 import 'my_robots_screen.dart';
-import 'bzvision_screen.dart';
+import 'bzvision_camera_screen.dart';
 import 'onboarding_screen.dart';
 import 'pump_hub_screen.dart';
 import 'catalogue_screen.dart';
@@ -296,7 +296,7 @@ class _HomeScreenState extends State<HomeScreen> {
           builder: (_) => BzLightPresentationScreen())); break;
       case 'bzvision':
         Navigator.push(context, MaterialPageRoute(
-          builder: (_) => BzVisionScreen())); break;
+          builder: (_) => const BzVisionCameraScreen())); break;
       case 'pompe':
         Navigator.push(context, MaterialPageRoute(
           builder: (_) => const PumpHubScreen())); break;
