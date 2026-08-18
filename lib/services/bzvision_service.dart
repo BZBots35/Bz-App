@@ -11,6 +11,14 @@ class BzVisionService {
   static const String canalisationsTable = 'canalisations';
   static const String inspectionsTable   = 'inspections';
   static const String videosBucketId     = 'bzvision_videos';
+  // Table de liaison vidéo <-> canalisation (métadonnées), sur le même
+  // modèle que inspectionsTable. Le fichier lui-même reste dans
+  // videosBucketId (Storage) ; ce document ne fait que le rattacher à
+  // un chantier/une canalisation, comme une inspection le ferait.
+  // À créer dans la console Appwrite avec les attributs :
+  //   canalisationID (string), chantierID (string), fileId (string),
+  //   filename (string), date (string), userID (string)
+  static const String canalisationVideosTable = 'canalisation_videos';
 
   late Client    _client;
   late Databases _db;
@@ -286,4 +294,38 @@ class BzVisionService {
   String getVideoStreamUrl(String fileId) =>
       '$endpoint/storage/buckets/$videosBucketId/files/$fileId/view'
       '?project=$projectId';
+
+  // ── Liaison vidéo <-> canalisation (métadonnées) ──
+  // Même logique que getInspections/createInspection, pour qu'une
+  // vidéo enregistrée depuis BzVisionCameraScreen apparaisse rattachée
+  // à sa canalisation, exactement comme une inspection.
+
+  Future<List<models.Document>> getVideosForCanalisation(String canalisationId) async {
+    try {
+      final result = await _db.listDocuments(
+        databaseId: databaseId, collectionId: canalisationVideosTable,
+        queries: [Query.equal('canalisationID', canalisationId)]);
+      return result.documents;
+    } catch (e) { return []; }
+  }
+
+  Future<models.Document?> createVideoRecord({
+    required String canalisationId,
+    required String chantierId,
+    required String fileId,
+    required String filename,
+    required String date,
+    required String userId,
+  }) async {
+    try {
+      return await _db.createDocument(
+        databaseId: databaseId, collectionId: canalisationVideosTable,
+        documentId: ID.unique(),
+        data: {
+          'canalisationID': canalisationId, 'chantierID': chantierId,
+          'fileId': fileId, 'filename': filename,
+          'date': date, 'userID': userId,
+        });
+    } catch (e) { return null; }
+  }
 }

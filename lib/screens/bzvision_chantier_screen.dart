@@ -572,6 +572,25 @@ class _BzVisionChantierScreenState extends State<BzVisionChantierScreen> {
                     Text('INSPECTER', style: TextStyle(color: Color(0xFF22D3EE),
                       fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
                   ])))),
+            const SizedBox(width: 8),
+            // Bouton caméra — vidéo rattachée à cette canalisation,
+            // comme une inspection (voir BzVisionCameraScreen).
+            GestureDetector(
+              onTap: () => Navigator.push(context, MaterialPageRoute(
+                builder: (_) => BzVisionCameraScreen(
+                  canalisationDoc: doc,
+                  chantierDoc:     widget.chantierDoc,
+                  userId:          widget.userId,
+                  userName:        widget.userName,
+                ))),
+              child: Container(
+                width: 38, height: 38,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF22D3EE).withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF22D3EE).withOpacity(0.2))),
+                child: const Icon(Icons.videocam_outlined,
+                  color: Color(0xFF22D3EE), size: 16))),
             if (widget.userRole == AppRoles.superAdmin ||
                 widget.userRole == AppRoles.admin) ...[
               const SizedBox(width: 8),
