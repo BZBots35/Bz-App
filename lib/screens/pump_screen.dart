@@ -146,7 +146,6 @@ class _PumpScreenState extends State<PumpScreen> {
         ? const Center(child: CircularProgressIndicator(
             color: Color(0xFF22D3EE)))
         : Column(children: [
-            _buildStats(),
             Expanded(
               child: _chantiers.isEmpty
                 ? _buildEmpty()
@@ -171,40 +170,6 @@ class _PumpScreenState extends State<PumpScreen> {
           style: const TextStyle(fontWeight: FontWeight.w700)),
       ),
     );
-  }
-
-  Widget _buildStats() {
-    final total = _chantiers.length;
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0A0A0F),
-        border: Border(bottom: BorderSide(
-          color: Colors.white.withOpacity(0.06)))),
-      child: Row(children: [
-        _statBox('Chantiers', '$total', const Color(0xFF22D3EE)),
-        const SizedBox(width: 12),
-        _statBox('Résine', 'A/B', Colors.purple),
-        const SizedBox(width: 12),
-        _statBox('Wi-Fi', 'Ready', Colors.green),
-      ]),
-    );
-  }
-
-  Widget _statBox(String label, String value, Color color) {
-    return Expanded(child: Container(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.07),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withOpacity(0.2))),
-      child: Column(children: [
-        Text(value, style: TextStyle(color: color,
-          fontWeight: FontWeight.w900, fontSize: 18)),
-        Text(label, style: TextStyle(color: color.withOpacity(0.7),
-          fontSize: 9, fontWeight: FontWeight.w600)),
-      ]),
-    ));
   }
 
   Widget _buildEmpty() {

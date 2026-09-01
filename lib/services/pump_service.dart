@@ -34,6 +34,29 @@ class PumpService {
   static const String databaseId         = '69cd0f11001c948b59e9';
   static const String chantiersTable     = 'pump_chantiers';
   static const String canalisationsTable = 'pump_canalisations';
+  // Une pompe = un appareil indépendant, avec son propre temps de
+  // fonctionnement cumulé. Un seul document pour l'instant
+  // ('pump_default', voir pump_control_screen.dart), mais la table
+  // est prévue pour en accueillir plusieurs plus tard.
+  // ⚠️ À CRÉER dans la console Appwrite : collection `pump_pumps` avec
+  // au moins l'attribut `totalRuntimeSeconds` (integer, défaut 0), et
+  // un document `pump_default` (ID personnalisé) pour la pompe actuelle.
+  static const String pumpsTable         = 'pump_pumps';
+  // Historique des sessions démarrage->arrêt, une ligne par session.
+  // ⚠️ À CRÉER dans la console Appwrite : collection `pump_sessions`
+  // avec les attributs : pumpId (string), startedAt (string/datetime),
+  // durationSeconds (integer), resinUsedL (float, défaut 0),
+  // chantierId (string, optionnel), canalisationId (string, optionnel),
+  // userId (string).
+  static const String sessionsTable      = 'pump_sessions';
+  // Historique complet des positions GPS d'une pompe — une ligne par
+  // capture, JAMAIS écrasée (voir _markPumpConnected/recordPumpLocation)
+  // pour qu'on puisse retracer tous les endroits différents où la
+  // pompe est passée, pas juste sa position la plus récente.
+  // ⚠️ À CRÉER dans la console Appwrite : collection `pump_locations`
+  // avec les attributs : pumpId (string), lat (float), lng (float),
+  // capturedAt (string/datetime).
+  static const String locationsTable     = 'pumpe_locations'; // ⚠️ coquille assumée : la collection Appwrite s'appelle bien "pumpe_locations", pas "pump_locations"
   // ⚠️ À CRÉER dans la console Appwrite (Storage → Create bucket), puis
   // colle l'ID généré ici. Prévoir une taille de fichier max suffisante
   // pour une vidéo timelapse (ex: 200 Mo) et des permissions cohérentes
@@ -91,13 +114,20 @@ class PumpService {
   // d'attente hors-ligne.
   Future<bool> _isOnline() async {
     final connectivityResult = await Connectivity().checkConnectivity();
-    if (connectivityResult == ConnectivityResult.none) return false;
+    print('[ONLINE] Connectivity().checkConnectivity() : $connectivityResult');
+    if (connectivityResult == ConnectivityResult.none) {
+      print('[ONLINE] Aucune interface réseau — hors ligne');
+      return false;
+    }
 
     try {
       final result = await InternetAddress.lookup('cloud.appwrite.io')
           .timeout(const Duration(seconds: 4));
-      return result.isNotEmpty && result.first.rawAddress.isNotEmpty;
-    } catch (_) {
+      final ok = result.isNotEmpty && result.first.rawAddress.isNotEmpty;
+      print('[ONLINE] Résolution DNS cloud.appwrite.io : $ok (${result.length} résultat(s))');
+      return ok;
+    } catch (e) {
+      print('[ONLINE] Résolution DNS échouée : $e');
       return false;
     }
   }
@@ -223,6 +253,31 @@ class PumpService {
   String _newTempId() =>
       'local_${DateTime.now().millisecondsSinceEpoch}_${identityHashCode(this)}';
 
+  /// Récupère le document pompe `pumpId`, ou le crée avec des valeurs
+  /// par défaut s'il n'existe pas encore. Utilisé partout où on doit
+  /// incrémenter le cumul d'une pompe (écriture directe ET rejeu de la
+  /// file d'attente) — la pompe se crée donc "à la volée" au moment où
+  /// une session se synchronise VRAIMENT, pas forcément au moment de
+  /// la connexion au hotspot (qui n'a généralement pas d'accès
+  /// internet, donc Appwrite y est injoignable).
+  Future<models.Document> _getOrCreatePumpDoc(String pumpId, {String? company}) async {
+    try {
+      return await _db.getDocument(databaseId: databaseId,
+        collectionId: pumpsTable, documentId: pumpId);
+    } catch (e) {
+      return await _db.createDocument(databaseId: databaseId,
+        collectionId: pumpsTable, documentId: pumpId,
+        data: {
+          'name': 'Pompe ${pumpId.length > 8 ? pumpId.substring(0, 8) : pumpId}',
+          'totalRuntimeSeconds': 0,
+          // Entreprise du premier utilisateur à avoir découvert cette
+          // pompe — jamais réécrasée ensuite (une pompe appartient à
+          // une seule entreprise, même si d'autres s'y connectent).
+          'company': company ?? '',
+        });
+    }
+  }
+
   /// Nombre d'opérations en attente de synchronisation (à afficher dans l'UI,
   /// ex : badge "3 modifications non synchronisées").
   Future<int> pendingCount() async => (await _loadQueue()).length;
@@ -233,6 +288,7 @@ class PumpService {
     if (!await _isOnline()) return;
 
     final queue = await _loadQueue();
+    print('[SYNC] File d\'attente : ${queue.length} opération(s)');
     if (queue.isEmpty) return;
 
     final mapping = await _loadMapping();
@@ -241,6 +297,7 @@ class PumpService {
     for (final op in queue) {
       try {
         final type = op['type'] as String;
+        print('[SYNC] Traitement de : $type — ${op['data']}');
         final data = Map<String, dynamic>.from(op['data'] as Map);
 
         // Remplace toute référence à un ID temporaire par le vrai ID
@@ -297,13 +354,75 @@ class PumpService {
               databaseId: databaseId, collectionId: collection,
               documentId: docId);
             break;
+
+          case 'ensurePump':
+            // Simple découverte/création, sans session associée —
+            // déclenchée par la seule connexion à une Pi, rejouée dès
+            // que le réseau revient.
+            await _getOrCreatePumpDoc(data['pumpId'] as String,
+              company: data['company'] as String?);
+            break;
+
+          case 'recordPumpSession':
+            // Crée la ligne d'historique ET incrémente le cumul de la
+            // pompe — lecture-puis-écriture pour le cumul (pas
+            // d'incrément atomique côté Appwrite), correct même si
+            // plusieurs sessions du même pumpId sont en attente : elles
+            // s'appliquent l'une après l'autre dans l'ordre.
+            final pumpId = data['pumpId'] as String;
+            final seconds = data['durationSeconds'] as int;
+            await _db.createDocument(databaseId: databaseId,
+              collectionId: sessionsTable, documentId: ID.unique(),
+              data: {
+                'pumpId': pumpId,
+                'startedAt': data['startedAt'],
+                'durationSeconds': seconds,
+                'resinUsedL': data['resinUsedL'],
+                'chantierId': data['chantierId'],
+                'canalisationId': data['canalisationId'],
+                'userId': data['userId'],
+              });
+            final pumpDoc = await _getOrCreatePumpDoc(pumpId,
+              company: data['company'] as String?);
+            final currentTotal =
+                (pumpDoc.data['totalRuntimeSeconds'] as num?)?.toInt() ?? 0;
+            await _db.updateDocument(databaseId: databaseId,
+              collectionId: pumpsTable, documentId: pumpId,
+              data: {'totalRuntimeSeconds': currentTotal + seconds});
+            break;
+
+          case 'recordPumpLocation':
+            // Ligne d'historique JAMAIS écrasée (une par capture), plus
+            // mise à jour du résumé "dernière position connue" sur le
+            // doc pompe pour un accès rapide sans tout requêter.
+            final locPumpId = data['pumpId'] as String;
+            await _db.createDocument(databaseId: databaseId,
+              collectionId: locationsTable, documentId: ID.unique(),
+              data: {
+                'pumpId': locPumpId,
+                'lat': data['lat'],
+                'lng': data['lng'],
+                'capturedAt': data['capturedAt'],
+                'company': data['company'],
+              });
+            await _getOrCreatePumpDoc(locPumpId, company: data['company'] as String?);
+            await _db.updateDocument(databaseId: databaseId,
+              collectionId: pumpsTable, documentId: locPumpId,
+              data: {
+                'lastLat': data['lat'],
+                'lastLng': data['lng'],
+                'lastLocationAt': data['capturedAt'],
+              });
+            break;
         }
       } catch (e) {
         // Échec réseau ponctuel : on la garde pour le prochain essai.
+        print('[SYNC] ÉCHEC pour ${op['type']} : $e');
         remaining.add(op);
       }
     }
 
+    print('[SYNC] Terminé — ${remaining.length} opération(s) encore en attente');
     await _saveMapping(mapping);
     await _saveQueue(remaining);
   }
@@ -531,6 +650,11 @@ Future<void> updateChantierEnv(String docId, String tempExt, String meteo) async
     String? label, String? longueur, String? diametre,
     int? passes, String? statut, int? passesDone,
     String? passesData, double? resinAppliedTotal,
+    String? passesTimestamps,
+    // Épaisseur/passe propre à cette canalisation (surcharge le réglage
+    // par défaut du chantier). Nécessite un attribut String sur la
+    // collection Appwrite `pump_canalisations` (nom : epaisseur).
+    String? epaisseur,
   }) async {
     final payload = <String, dynamic>{};
     if (label      != null) payload['label']      = label;
@@ -541,6 +665,8 @@ Future<void> updateChantierEnv(String docId, String tempExt, String meteo) async
     if (passesDone != null) payload['passesDone'] = passesDone;
     if (passesData != null) payload['passesData'] = passesData;
     if (resinAppliedTotal != null) payload['resinAppliedTotal'] = resinAppliedTotal;
+    if (passesTimestamps != null) payload['passesTimestamps'] = passesTimestamps;
+    if (epaisseur != null) payload['epaisseur'] = epaisseur;
 
     if (await _isOnline()) {
       await _db.updateDocument(databaseId: databaseId,
@@ -569,6 +695,218 @@ Future<void> updateChantierEnv(String docId, String tempExt, String meteo) async
       'type': 'deleteCanalisation',
       'data': {'docId': docId},
     });
+  }
+
+  // ── Pompes (découverte auto, temps cumulé, historique) ────
+
+  /// Liste les pompes connues de la même entreprise que l'utilisateur
+  /// (isolation "logicielle", cohérente avec getChantiers — pas une
+  /// vraie isolation Appwrite par permissions/Teams). Les rôles
+  /// admin/super_admin voient tout, comme pour les chantiers.
+  Future<List<models.Document>> listPumps({
+    required String company, required String role,
+  }) async {
+    try {
+      if (await _isOnline()) {
+        // Pousse d'abord tout ce qui est en attente — sans ça, une
+        // pompe/position capturée hors-ligne peut rester invisible
+        // indéfiniment si aucun écran n'a été ouvert au moment précis
+        // du retour du réseau (l'écouteur de connectivité automatique
+        // ne vit que le temps qu'un écran utilisant PumpService reste
+        // affiché).
+        await syncPendingOperations();
+      }
+      final queries = (role == 'super_admin' || role == 'admin')
+        ? <String>[] : [Query.equal('company', company)];
+      final result = await _db.listDocuments(databaseId: databaseId,
+        collectionId: pumpsTable, queries: queries);
+      return result.documents;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// Découverte déclenchée par la simple connexion à une Pi (dès qu'on
+  /// connaît le pump_id via /telemetry) — fonctionne même hors ligne
+  /// (mis en file d'attente, rejoué au retour du réseau), donc pas
+  /// besoin de démarrer la pompe pour qu'elle apparaisse dans la liste.
+  /// `company` n'est utilisé que si la pompe n'existe pas encore
+  /// (jamais réécrasé sur une pompe déjà connue).
+  Future<models.Document?> getOrCreatePump(String pumpId, String company) async {
+    if (await _isOnline()) {
+      try {
+        return await _getOrCreatePumpDoc(pumpId, company: company);
+      } catch (e) {
+        await _queueOp({'type': 'ensurePump',
+          'data': {'pumpId': pumpId, 'company': company}});
+        return null;
+      }
+    }
+    await _queueOp({'type': 'ensurePump',
+      'data': {'pumpId': pumpId, 'company': company}});
+    return null;
+  }
+
+  Future<models.Document?> getPump(String pumpId) async {
+    try {
+      return await _db.getDocument(databaseId: databaseId,
+        collectionId: pumpsTable, documentId: pumpId);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  Future<void> renamePump(String pumpId, String name) async {
+    try {
+      await _db.updateDocument(databaseId: databaseId,
+        collectionId: pumpsTable, documentId: pumpId, data: {'name': name});
+    } catch (e) {
+      // Best-effort — pas critique, on ne bloque pas l'opérateur pour un renommage.
+    }
+  }
+
+  /// Liste les sessions d'une pompe, les plus récentes en premier.
+  Future<List<models.Document>> getPumpSessions(String pumpId) async {
+    try {
+      if (await _isOnline()) {
+        await syncPendingOperations();
+      }
+      final result = await _db.listDocuments(databaseId: databaseId,
+        collectionId: sessionsTable,
+        queries: [
+          Query.equal('pumpId', pumpId),
+          Query.orderDesc('startedAt'),
+        ]);
+      return result.documents;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// Enregistre une session démarrage->arrêt (durée + résine utilisée
+  /// pendant CETTE session précise) et incrémente le cumul de la
+  /// pompe. Best-effort avec file d'attente hors-ligne (comme le reste
+  /// du service) : rien n'est perdu si le technicien est hors réseau
+  /// au moment de couper la pompe.
+  Future<void> recordPumpSession({
+    required String pumpId,
+    required String company,
+    required DateTime startedAt,
+    required int durationSeconds,
+    required double resinUsedL,
+    String? chantierId,
+    String? canalisationId,
+    required String userId,
+  }) async {
+    if (durationSeconds <= 0) return;
+
+    final payload = {
+      'pumpId': pumpId,
+      'company': company,
+      'startedAt': startedAt.toIso8601String(),
+      'durationSeconds': durationSeconds,
+      'resinUsedL': resinUsedL,
+      'chantierId': chantierId,
+      'canalisationId': canalisationId,
+      'userId': userId,
+    };
+
+    if (await _isOnline()) {
+      try {
+        await _db.createDocument(databaseId: databaseId,
+          collectionId: sessionsTable, documentId: ID.unique(), data: payload);
+        final doc = await _getOrCreatePumpDoc(pumpId, company: company);
+        final current = (doc.data['totalRuntimeSeconds'] as num?)?.toInt() ?? 0;
+        await _db.updateDocument(databaseId: databaseId,
+          collectionId: pumpsTable, documentId: pumpId,
+          data: {'totalRuntimeSeconds': current + durationSeconds});
+      } catch (e) {
+        await _queueOp({'type': 'recordPumpSession', 'data': payload});
+      }
+      return;
+    }
+
+    await _queueOp({'type': 'recordPumpSession', 'data': payload});
+  }
+
+  // ── Géolocalisation (capturée via le GPS du téléphone, PAS la Pi —
+  // fonctionne donc même sur le hotspot sans internet) ──
+
+  /// Enregistre une nouvelle position pour `pumpId`. Historique complet
+  /// — n'écrase JAMAIS une capture précédente, chaque appel ajoute une
+  /// ligne. Best-effort avec file d'attente hors-ligne, comme le reste
+  /// du service.
+  Future<void> recordPumpLocation({
+    required String pumpId,
+    required String company,
+    required double lat,
+    required double lng,
+    required DateTime capturedAt,
+  }) async {
+    final payload = {
+      'pumpId': pumpId,
+      'company': company,
+      'lat': lat,
+      'lng': lng,
+      'capturedAt': capturedAt.toIso8601String(),
+    };
+
+    if (await _isOnline()) {
+      try {
+        await _db.createDocument(databaseId: databaseId,
+          collectionId: locationsTable, documentId: ID.unique(), data: payload);
+        await _getOrCreatePumpDoc(pumpId, company: company);
+        await _db.updateDocument(databaseId: databaseId,
+          collectionId: pumpsTable, documentId: pumpId,
+          data: {'lastLat': lat, 'lastLng': lng,
+                 'lastLocationAt': payload['capturedAt']});
+      } catch (e) {
+        await _queueOp({'type': 'recordPumpLocation', 'data': payload});
+      }
+      return;
+    }
+
+    await _queueOp({'type': 'recordPumpLocation', 'data': payload});
+  }
+
+  /// Tout l'historique de positions d'UNE pompe (pour son trajet dans
+  /// le détail), les plus récentes en premier.
+  Future<List<models.Document>> getPumpLocations(String pumpId) async {
+    try {
+      final result = await _db.listDocuments(databaseId: databaseId,
+        collectionId: locationsTable,
+        queries: [
+          Query.equal('pumpId', pumpId),
+          Query.orderDesc('capturedAt'),
+        ]);
+      return result.documents;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// TOUTES les positions des pompes de la même entreprise que
+  /// l'utilisateur (isolation logicielle, comme listPumps/getChantiers)
+  /// — pour la carte d'ensemble. Admin/super_admin voient tout.
+  Future<List<models.Document>> getAllPumpLocations({
+    required String company, required String role,
+  }) async {
+    try {
+      if (await _isOnline()) {
+        await syncPendingOperations();
+      }
+      final queries = (role == 'super_admin' || role == 'admin')
+        ? <String>[Query.orderDesc('capturedAt'), Query.limit(500)]
+        : [Query.equal('company', company),
+           Query.orderDesc('capturedAt'), Query.limit(500)];
+      final result = await _db.listDocuments(databaseId: databaseId,
+        collectionId: locationsTable, queries: queries);
+      print('[GETLOC] ${result.documents.length} position(s) trouvée(s)');
+      return result.documents;
+    } catch (e) {
+      print('[GETLOC] Erreur de lecture : $e');
+      return [];
+    }
   }
 
   // ── Vidéos timelapse : upload vers Appwrite Storage ──────────

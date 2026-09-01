@@ -4,7 +4,9 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   desktop_webview_window
+  ffmpeg_kit_flutter_new
   file_selector_linux
+  media_kit_libs_linux
   media_kit_video
   printing
   url_launcher_linux

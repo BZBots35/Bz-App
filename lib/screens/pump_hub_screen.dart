@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'pump_screen.dart';
 import 'pump_direct_screen.dart';
+import 'pump_maintenance_screen.dart';
 import '../services/lang_service.dart';
 
 /// Écran d'accueil pompe : point d'entrée avant tout le reste.
@@ -74,6 +75,16 @@ class _PumpHubScreenState extends State<PumpHubScreen> {
               subtitle: _lang.t('pumpHubDirectSubtitle'),
               onTap: () => Navigator.push(context, MaterialPageRoute(
                 builder: (_) => const PumpDirectScreen())),
+            ),
+            const SizedBox(height: 16),
+            _hubCard(
+              context: context,
+              icon: Icons.build_outlined,
+              color: Colors.orange,
+              title: _lang.t('pumpHubMaintenanceTitle'),
+              subtitle: _lang.t('pumpHubMaintenanceSubtitle'),
+              onTap: () => Navigator.push(context, MaterialPageRoute(
+                builder: (_) => const PumpMaintenanceScreen())),
             ),
           ]),
         ),

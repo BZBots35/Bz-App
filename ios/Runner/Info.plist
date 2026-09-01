@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>BzVision a besoin du micro pour enregistrer vocalement les anomalies détectées</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>BzVision utilise la reconnaissance vocale pour retranscrire les anomalies signalées à l'oral</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>

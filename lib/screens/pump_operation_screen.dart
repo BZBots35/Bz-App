@@ -6,15 +6,19 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:appwrite/models.dart' as models;
 import 'package:fl_chart/fl_chart.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import '../services/pump_service.dart';
+import '../services/bzvision_service.dart';
 import '../services/lang_service.dart';
 import 'pump_control_screen.dart';
+import 'bzvision_camera_screen.dart';
 
 class PumpOperationScreen extends StatefulWidget {
   final models.Document canalisationDoc;
   final models.Document chantierDoc;
   final double epaisseur;
-  final String resinType, userName;
+  final String resinType, userName, userId;
 
   const PumpOperationScreen({
     super.key,
@@ -23,6 +27,7 @@ class PumpOperationScreen extends StatefulWidget {
     required this.epaisseur,
     required this.resinType,
     required this.userName,
+    required this.userId,
   });
 
   @override
@@ -31,6 +36,7 @@ class PumpOperationScreen extends StatefulWidget {
 
 class _PumpOperationScreenState extends State<PumpOperationScreen> {
   final _service = PumpService();
+  final _bzVisionService = BzVisionService();
   final _lang = LangService();
 
   // ── Connexion Pi ──────────────────────────────
@@ -68,6 +74,9 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
   late double _diametre;
   late int _passes;
   late String _label;
+  // Épaisseur/passe : par défaut celle du chantier (widget.epaisseur),
+  // mais surchargeable par canalisation (champ Appwrite `epaisseur`).
+  late double _epaisseurPasse;
 
   // ── État Passes ───────────────────────────────
   int _passesDone = 0;
@@ -78,8 +87,12 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
   Map<String, dynamic> _passesData = {};
   late models.Document _currentCanalisationDoc;
 
+  // ── Vidéos d'inspection BzVision, par clé de passe ('1','2'... ou
+  // 'final' pour l'inspection finale après la dernière passe) ──
+  Map<String, models.Document> _passVideoDocs = {};
+
   double get _qteParPasse =>
-      _longueur * (math.pi * _diametre * widget.epaisseur / 1000);
+      _longueur * (math.pi * _diametre * _epaisseurPasse / 1000);
 
   @override
   void initState() {
@@ -92,8 +105,22 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
     _longueur = double.tryParse(d['longueur'] as String? ?? '10') ?? 10;
     _diametre = double.tryParse(d['diametre'] as String? ?? '100') ?? 100;
     _passes   = d['passes']   as int? ?? 4;
+    _epaisseurPasse =
+        double.tryParse(d['epaisseur'] as String? ?? '') ?? widget.epaisseur;
     _passesDone = d['passesDone'] as int? ?? 0;
     _loadPassesData(d);
+    _loadPassVideos();
+  }
+
+  Future<void> _loadPassVideos() async {
+    final docs = await _bzVisionService
+        .getVideosForCanalisation(_currentCanalisationDoc.$id);
+    final map = <String, models.Document>{};
+    for (final d in docs) {
+      final key = d.data['passNum'] as String?;
+      if (key != null && key.isNotEmpty) map[key] = d;
+    }
+    if (mounted) setState(() => _passVideoDocs = map);
   }
 
   void _loadPassesData(Map<String, dynamic> data) {
@@ -135,7 +162,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
         .toList();
     if (points.length < 2) return;
     final maxDataY = points.map((s) => s.y).reduce((a, b) => a > b ? a : b);
-    final maxY = (maxDataY > widget.epaisseur ? maxDataY : widget.epaisseur) * 1.2;
+    final maxY = (maxDataY > _epaisseurPasse ? maxDataY : _epaisseurPasse) * 1.2;
 
     showDialog(
       context: context,
@@ -193,7 +220,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
                   show: true, border: Border.all(color: Colors.white.withOpacity(0.08))),
               extraLinesData: ExtraLinesData(horizontalLines: [
                 HorizontalLine(
-                  y: widget.epaisseur,
+                  y: _epaisseurPasse,
                   color: Colors.grey[400]!.withOpacity(0.6),
                   strokeWidth: 1,
                   dashArray: [4, 3],
@@ -202,7 +229,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
                       alignment: Alignment.topRight,
                       style: TextStyle(color: Colors.grey[400], fontSize: 8),
                       labelResolver: (line) =>
-                          '${_lang.t('pumpChartTargetPrefix')}${widget.epaisseur.toStringAsFixed(1)}mm'),
+                          '${_lang.t('pumpChartTargetPrefix')}${_epaisseurPasse.toStringAsFixed(1)}mm'),
                 ),
               ]),
               lineBarsData: [
@@ -227,6 +254,74 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
         ],
       ),
     );
+  }
+
+  // ── Inspection avant passe (ou finale) : vidéo BzVision ou
+  // confirmation manuelle ──
+  // [passKey] vaut '1', '2'... pour une passe précise, ou 'final' pour
+  // l'inspection finale faite après la dernière passe.
+
+  Future<void> _recordInspectionVideo(String passKey) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BzVisionCameraScreen(
+          chantierDoc: widget.chantierDoc,
+          canalisationDoc: _currentCanalisationDoc,
+          userId: widget.userId,
+          userName: widget.userName,
+          passNum: passKey,
+        ),
+      ),
+    );
+    // De retour de l'écran BzVision : on recharge pour afficher la
+    // vidéo qui vient d'être filmée (si elle a bien été sauvegardée).
+    await _loadPassVideos();
+  }
+
+  Future<void> _confirmManualInspection(String passKey) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF0D0D0D),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: Colors.red.withOpacity(0.4))),
+        title: Row(children: [
+          const Icon(Icons.warning_amber_rounded, color: Colors.red, size: 22),
+          const SizedBox(width: 8),
+          Expanded(
+              child: Text(_lang.t('pumpOpManualInspectionWarningTitle'),
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 13))),
+        ]),
+        content: Text(_lang.t('pumpOpManualInspectionWarningMsg'),
+            style:
+                TextStyle(color: Colors.grey[400], fontSize: 12, height: 1.5)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(_lang.t('pumpOpCancelBtn'),
+                  style: const TextStyle(color: Colors.grey))),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red, foregroundColor: Colors.white),
+            child: Text(_lang.t('pumpOpManualInspectionConfirmBtn'),
+                style: const TextStyle(
+                    fontWeight: FontWeight.w900, fontSize: 11)),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(_lang.t('pumpOpManualInspectionConfirmedMsg')),
+          backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating));
+    }
   }
 
   // ── Modal sécurité avant GO ────────────────────
@@ -313,7 +408,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
           builder: (_) => PumpControlScreen(
             canalisationDoc: _currentCanalisationDoc,
             chantierDoc:     widget.chantierDoc,
-            epaisseur:       widget.epaisseur,
+            epaisseur:       _epaisseurPasse,
             resinType:       widget.resinType,
             userName:        widget.userName,
             passNum:         passNum,
@@ -362,7 +457,7 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
     final resinName = widget.resinType == 'spraycoat_plus'
         ? 'Spraycoat+'
         : 'Spraycoat Flex';
-    final totalEp = (widget.epaisseur * _passes).toStringAsFixed(2);
+    final totalEp = (_epaisseurPasse * _passes).toStringAsFixed(2);
 
     return Scaffold(
       backgroundColor: const Color(0xFF050505),
@@ -373,26 +468,32 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
             icon: const Icon(Icons.chevron_left, color: Colors.white, size: 28),
             onPressed: () => Navigator.pop(context)),
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Text('${_lang.t('pumpOpCoatingLabel')} ',
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 14)),
-            Text('#${widget.canalisationDoc.data['label'] ?? '—'}',
-                style: const TextStyle(
-                    color: Color(0xFF22D3EE),
-                    fontWeight: FontWeight.w900,
-                    fontSize: 14)),
-          ]),
-          Row(children: [
-            _headerBadge('DN${_diametre.toInt()}', const Color(0xFF22D3EE)),
-            const SizedBox(width: 6),
-            _headerBadge(resinName, Colors.white),
-            const SizedBox(width: 6),
-            _headerBadge(
-                '${widget.epaisseur.toStringAsFixed(2)}mm/passe', Colors.white),
-          ]),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              Text('${_lang.t('pumpOpCoatingLabel')} ',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 14)),
+              Text('#${widget.canalisationDoc.data['label'] ?? '—'}',
+                  style: const TextStyle(
+                      color: Color(0xFF22D3EE),
+                      fontWeight: FontWeight.w900,
+                      fontSize: 14)),
+            ]),
+          ),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              _headerBadge('DN${_diametre.toInt()}', const Color(0xFF22D3EE)),
+              const SizedBox(width: 6),
+              _headerBadge(resinName, Colors.white),
+              const SizedBox(width: 6),
+              _headerBadge(
+                  '${_epaisseurPasse.toStringAsFixed(2)}mm/passe', Colors.white),
+            ]),
+          ),
         ]),
         actions: [
           Container(
@@ -434,7 +535,94 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
           _buildParamsReminder(totalEp, resinName),
           const SizedBox(height: 14),
           _buildPassesList(),
+          _buildInspectionVideoSection(),
+          _buildFinalInspectionSection(),
           const SizedBox(height: 20),
+        ]),
+      ),
+    );
+  }
+
+  // Vidéo affichée : celle de la passe "courante" — la prochaine à
+  // faire (ou la dernière si tout est terminé) — pour retrouver tout
+  // de suite ce qui vient d'être filmé, sans avoir à naviguer ailleurs.
+  Widget _buildInspectionVideoSection() {
+    final displayPassNum = (_passesDone + 1).clamp(1, _passes);
+    final videoDoc = _passVideoDocs['$displayPassNum'];
+    if (videoDoc == null) return const SizedBox.shrink();
+
+    final fileId = videoDoc.data['fileId'] as String?;
+    if (fileId == null) return const SizedBox.shrink();
+    final url = _bzVisionService.getVideoStreamUrl(fileId);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 14),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+            color: const Color(0xFF0A0A0F),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withOpacity(0.06))),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Icon(Icons.videocam, color: Color(0xFF22D3EE), size: 13),
+            const SizedBox(width: 6),
+            Text(
+                '${_lang.t('pumpOpInspectionVideoTitle')} — '
+                '${_lang.t('pumpOpPasseLabel')} N°$displayPassNum',
+                style: TextStyle(
+                    color: Colors.grey[400],
+                    fontSize: 8,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1.5)),
+          ]),
+          const SizedBox(height: 10),
+          ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: _InspectionVideoPlayer(key: ValueKey(fileId), url: url)),
+        ]),
+      ),
+    );
+  }
+
+  // Inspection finale : une fois toutes les passes terminées, on
+  // propose à nouveau les 2 boutons (vidéo BzVision / déjà inspecté)
+  // pour un dernier contrôle qualité de la canalisation finie — clé
+  // 'final', distincte des passes numérotées.
+  Widget _buildFinalInspectionSection() {
+    if (_passesDone < _passes) return const SizedBox.shrink();
+    final videoDoc = _passVideoDocs['final'];
+    final fileId = videoDoc?.data['fileId'] as String?;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 14),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+            color: Colors.green.withOpacity(0.04),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.green.withOpacity(0.25))),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Icon(Icons.fact_check_outlined, color: Colors.green, size: 13),
+            const SizedBox(width: 6),
+            Text(_lang.t('pumpOpFinalInspectionTitle'),
+                style: TextStyle(
+                    color: Colors.grey[400],
+                    fontSize: 8,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1.5)),
+          ]),
+          const SizedBox(height: 10),
+          _buildInspectionButtonsRow('final'),
+          if (fileId != null) ...[
+            const SizedBox(height: 10),
+            ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: _InspectionVideoPlayer(
+                    key: ValueKey('final_$fileId'),
+                    url: _bzVisionService.getVideoStreamUrl(fileId))),
+          ],
         ]),
       ),
     );
@@ -468,10 +656,15 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
                 letterSpacing: 2)),
         const SizedBox(height: 8),
         Row(children: [
-          _paramCell(_lang.t('pumpOpDiametreLabel'),   'DN${_diametre.toInt()}'),
-          _paramCell(_lang.t('pumpOpLongueurLabel'),   '${_longueur}m'),
-          _paramCell(_lang.t('pumpOpEpPasseLabel'),  '${widget.epaisseur.toStringAsFixed(2)}mm'),
-          _paramCell(_lang.t('pumpOpNbPassesLabel'),  '$_passes'),
+          _paramCell(_lang.t('pumpOpDiametreLabel'), 'DN${_diametre.toInt()}',
+              onTap: _editDiametre),
+          _paramCell(_lang.t('pumpOpLongueurLabel'), '${_longueur}m',
+              onTap: _editLongueur),
+          _paramCell(_lang.t('pumpOpEpPasseLabel'),
+              '${_epaisseurPasse.toStringAsFixed(2)}mm',
+              onTap: _editEpaisseurPasse),
+          _paramCell(_lang.t('pumpOpNbPassesLabel'), '$_passes',
+              onTap: _editPasses),
           _paramCell(_lang.t('pumpOpEpTotaleLabel'), '${totalEp}mm'),
           _paramCell(_lang.t('pumpOpQtePasseLabel'),  '${_qteParPasse.toStringAsFixed(2)}L',
               color: const Color(0xFF22D3EE)),
@@ -480,7 +673,35 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
     );
   }
 
-  Widget _paramCell(String label, String value, {Color color = Colors.white}) {
+  // [onTap] rend la cellule cliquable pour l'édition (Diamètre, Longueur,
+  // Épaisseur/passe, Nb passes) ; les cellules calculées (Épaisseur
+  // totale, Qté/passe) restent en lecture seule (pas de onTap).
+  Widget _paramCell(String label, String value,
+      {Color color = Colors.white, VoidCallback? onTap}) {
+    final valueBox = Container(
+        margin: const EdgeInsets.symmetric(horizontal: 1),
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+        decoration: BoxDecoration(
+            color: color.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(6),
+            border: onTap != null
+                ? Border.all(color: color.withOpacity(0.2))
+                : null),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Flexible(
+            child: Text(value,
+                style: TextStyle(
+                    color: color, fontSize: 10, fontWeight: FontWeight.w900),
+                textAlign: TextAlign.center,
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1),
+          ),
+          if (onTap != null) ...[
+            const SizedBox(width: 3),
+            Icon(Icons.edit, size: 8, color: color.withOpacity(0.6)),
+          ],
+        ]));
+
     return Expanded(
         child: Column(children: [
       Text(label,
@@ -491,18 +712,111 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
               letterSpacing: 0.5),
           textAlign: TextAlign.center),
       const SizedBox(height: 3),
-      Container(
-          margin: const EdgeInsets.symmetric(horizontal: 2),
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          decoration: BoxDecoration(
-              color: color.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(6)),
-          child: Text(value,
-              style: TextStyle(
-                  color: color, fontSize: 10, fontWeight: FontWeight.w900),
-              textAlign: TextAlign.center)),
+      onTap != null
+          ? GestureDetector(onTap: onTap, child: valueBox)
+          : valueBox,
     ]));
   }
+
+  // ── Édition des paramètres depuis "Rappel de paramètres" ──
+
+  Future<void> _editParamDialog({
+    required String title,
+    required String initialValue,
+    required ValueChanged<String> onSave,
+    bool decimal = true,
+  }) async {
+    final ctrl = TextEditingController(text: initialValue);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF0D0D0D),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(title,
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w900)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: decimal
+              ? const TextInputType.numberWithOptions(decimal: true)
+              : TextInputType.number,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+              filled: true,
+              fillColor: Colors.black.withOpacity(0.4),
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10))),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(_lang.t('pumpOpCancelBtn'),
+                  style: const TextStyle(color: Colors.grey))),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, ctrl.text.trim()),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF22D3EE),
+                foregroundColor: Colors.black),
+            child: Text(_lang.t('pumpOpSaveBtn'),
+                style: const TextStyle(fontWeight: FontWeight.w900)),
+          ),
+        ],
+      ),
+    );
+    if (result != null && result.isNotEmpty) onSave(result);
+  }
+
+  Future<void> _editDiametre() => _editParamDialog(
+        title: _lang.t('pumpOpDiametreLabel'),
+        initialValue: _diametre.toStringAsFixed(0),
+        onSave: (v) async {
+          final val = double.tryParse(v);
+          if (val == null || val <= 0) return;
+          setState(() => _diametre = val);
+          await _service.updateCanalisation(_currentCanalisationDoc.$id,
+              diametre: v);
+        },
+      );
+
+  Future<void> _editLongueur() => _editParamDialog(
+        title: _lang.t('pumpOpLongueurLabel'),
+        initialValue: _longueur.toString(),
+        onSave: (v) async {
+          final val = double.tryParse(v);
+          if (val == null || val <= 0) return;
+          setState(() => _longueur = val);
+          await _service.updateCanalisation(_currentCanalisationDoc.$id,
+              longueur: v);
+        },
+      );
+
+  Future<void> _editPasses() => _editParamDialog(
+        title: _lang.t('pumpOpNbPassesLabel'),
+        initialValue: '$_passes',
+        decimal: false,
+        onSave: (v) async {
+          final val = int.tryParse(v);
+          if (val == null || val < 1) return;
+          setState(() => _passes = val);
+          await _service.updateCanalisation(_currentCanalisationDoc.$id,
+              passes: val);
+        },
+      );
+
+  Future<void> _editEpaisseurPasse() => _editParamDialog(
+        title: _lang.t('pumpOpEpPasseLabel'),
+        initialValue: _epaisseurPasse.toStringAsFixed(2),
+        onSave: (v) async {
+          final val = double.tryParse(v);
+          if (val == null || val <= 0) return;
+          setState(() => _epaisseurPasse = val);
+          await _service.updateCanalisation(_currentCanalisationDoc.$id,
+              epaisseur: v);
+        },
+      );
 
   Widget _buildPassesList() {
     return Container(
@@ -535,18 +849,25 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
           else if (isNext)  borderColor = const Color(0xFF22D3EE).withOpacity(0.4);
           else              borderColor = Colors.white.withOpacity(0.06);
 
-          return Container(
-            margin: const EdgeInsets.only(bottom: 6),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            decoration: BoxDecoration(
-                color: isDone
-                    ? Colors.green.withOpacity(0.05)
-                    : isNext
-                        ? const Color(0xFF22D3EE).withOpacity(0.04)
-                        : Colors.black.withOpacity(0.3),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: borderColor)),
-            child: Row(children: [
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (isNext) ...[
+                _buildInspectionButtonsRow('$passNum'),
+                const SizedBox(height: 6),
+              ],
+              Container(
+                margin: const EdgeInsets.only(bottom: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                    color: isDone
+                        ? Colors.green.withOpacity(0.05)
+                        : isNext
+                            ? const Color(0xFF22D3EE).withOpacity(0.04)
+                            : Colors.black.withOpacity(0.3),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: borderColor)),
+                child: Row(children: [
               Container(
                   width: 22,
                   height: 22,
@@ -628,9 +949,111 @@ class _PumpOperationScreenState extends State<PumpOperationScreen> {
                 const Icon(Icons.lock_outline,
                     color: Colors.white24, size: 14),
             ]),
+              ),
+            ],
           );
         }),
       ]),
+    );
+  }
+
+  Widget _buildInspectionButtonsRow(String passKey) {
+    return Row(children: [
+      Expanded(
+          child: _inspectionActionButton(
+        icon: Icons.videocam_outlined,
+        label: _lang.t('pumpOpVideoInspectionBtn'),
+        color: const Color(0xFF22D3EE),
+        onTap: () => _recordInspectionVideo(passKey),
+      )),
+      const SizedBox(width: 6),
+      Expanded(
+          child: _inspectionActionButton(
+        icon: Icons.handyman_outlined,
+        label: _lang.t('pumpOpManualInspectionBtn'),
+        color: Colors.orange,
+        onTap: () => _confirmManualInspection(passKey),
+      )),
+    ]);
+  }
+
+  Widget _inspectionActionButton({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        decoration: BoxDecoration(
+            color: color.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: color.withOpacity(0.3))),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(icon, color: color, size: 13),
+          const SizedBox(width: 5),
+          Flexible(
+              child: Text(label,
+                  style: TextStyle(
+                      color: color, fontSize: 9, fontWeight: FontWeight.w900),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1)),
+        ]),
+      ),
+    );
+  }
+}
+/// Lecteur vidéo intégré pour rejouer une vidéo d'inspection BzVision
+/// directement dans pump_operation_screen, sans changer d'écran.
+///
+/// ⚠️ Nécessite que `MediaKit.ensureInitialized()` ait été appelé une
+/// fois au démarrage de l'app (typiquement dans `main()`, avant
+/// `runApp`) — media_kit/media_kit_video sont déjà dans le pubspec,
+/// mais si aucun autre écran ne les utilise encore, cet appel
+/// d'initialisation manque peut-être. Sans lui, la vidéo ne se
+/// lira pas (écran noir).
+class _InspectionVideoPlayer extends StatefulWidget {
+  final String url;
+
+  const _InspectionVideoPlayer({super.key, required this.url});
+
+  @override
+  State<_InspectionVideoPlayer> createState() => _InspectionVideoPlayerState();
+}
+
+class _InspectionVideoPlayerState extends State<_InspectionVideoPlayer> {
+  late final Player _player;
+  late final VideoController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _player = Player();
+    _controller = VideoController(_player);
+    _player.open(Media(widget.url));
+  }
+
+  @override
+  void didUpdateWidget(covariant _InspectionVideoPlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) {
+      _player.open(Media(widget.url));
+    }
+  }
+
+  @override
+  void dispose() {
+    _player.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AspectRatio(
+      aspectRatio: 16 / 9,
+      child: Video(controller: _controller),
     );
   }
 }

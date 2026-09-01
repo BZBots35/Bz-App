@@ -74,6 +74,9 @@ class _LoginScreenState extends State<LoginScreen> {
           (_) => false);
       }
     } catch (e) {
+      // TEMPORAIRE — pour voir la vraie erreur dans le terminal au
+      // lieu du seul message générique affiché à l'utilisateur.
+      print('[LoginScreen] Erreur de connexion réelle : $e');
       setState(() => _error = _lang.t('invalidCredentialsFr'));
     } finally {
       setState(() => _loading = false);

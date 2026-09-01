@@ -31,7 +31,10 @@ dependencies:
   connectivity_plus: ^6.0.0
   flutter:
     sdk: flutter
-
+  teledepannage_shared:
+    path: ../teledepannage/packages/teledepannage_shared
+  teledepannage_ui:
+    path: ../teledepannage/packages/teledepannage_ui
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
@@ -53,12 +56,17 @@ dependencies:
   media_kit: ^1.1.11
   media_kit_video: ^1.2.4
   media_kit_libs_android_video: ^1.3.5
+  media_kit_libs_video: ^1.0.7
   flutter_map: ^4.0.0
   latlong2: ^0.8.2
   gal: ^2.3.0
   share_plus: ^10.0.0
   wifi_iot: ^0.3.19+2
   fl_chart: ^1.2.0
+  ffmpeg_kit_flutter_new: ^4.6.2
+  geolocator: ^14.0.2
+  speech_to_text: ^7.4.0
+  
 dev_dependencies:
   flutter_test:
     sdk: flutter

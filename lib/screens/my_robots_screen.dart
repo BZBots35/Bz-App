@@ -7,10 +7,14 @@ import 'package:image_picker/image_picker.dart';
 import '../services/auth_service.dart';
 import '../services/app_roles.dart';
 import '../services/robot_service.dart';
+import '../services/pump_service.dart';
 import '../services/lang_service.dart';
 import '../widgets/lang_selector.dart';
 import 'bzlight_dashboard_screen.dart';
 import 'bzlight_screen.dart';
+import 'pump_detail_screen.dart';
+import 'pump_map_screen.dart';
+import 'pump_fake_data.dart';
 import 'bz_tutorial.dart';
 
 class MyRobotsScreen extends StatefulWidget {
@@ -22,12 +26,18 @@ class MyRobotsScreen extends StatefulWidget {
 class _MyRobotsScreenState extends State<MyRobotsScreen> {
   final _auth        = AuthService();
   final _robots      = RobotService();
+  final _pumpService = PumpService();
   final _lang        = LangService();
   final _tutorialKey = GlobalKey<BzTutorialState>();
 
+  // 0 = BZLight, 1 = Pompes — choisi via le menu déroulant, pas des onglets.
+  int _selectedCategory = 0;
+
   List<TutorialStep> get _tutorialSteps => [];
   List<models.Document> _list = [];
+  List<models.Document> _pumps = [];
   bool   _loading     = true;
+  bool   _pumpsLoading = true;
   String _userRole    = 'client';
   String _userCompany = '';
 
@@ -36,6 +46,7 @@ class _MyRobotsScreenState extends State<MyRobotsScreen> {
     super.initState();
     _lang.addListener(() { if (mounted) setState(() {}); });
     _loadRobots();
+    _loadPumps();
   }
 
   Future<void> _loadRobots() async {
@@ -66,6 +77,33 @@ class _MyRobotsScreenState extends State<MyRobotsScreen> {
     } else {
       setState(() => _loading = false);
     }
+  }
+
+  // Onglet "Pompes" — même logique de cloisonnement par entreprise que
+  // pump_list_screen.dart (PumpService.listPumps gère déjà le rôle
+  // admin/super_admin en interne).
+  Future<void> _loadPumps() async {
+    setState(() => _pumpsLoading = true);
+    String role = '';
+    String company = '';
+    try {
+      final user = await _auth.getCurrentUser();
+      if (user != null) {
+        role = await _auth.getUserRole(user.$id);
+        company = await _auth.getUserCompany(user.$id);
+      }
+    } catch (e) {
+      print('[MyRobotsScreen] Erreur récupération entreprise/rôle : $e');
+    }
+    final pumps = await _pumpService.listPumps(company: company, role: role);
+    if (mounted) setState(() { _pumps = pumps; _pumpsLoading = false; });
+  }
+
+  String _formatPumpDuration(int totalSeconds) {
+    final h = totalSeconds ~/ 3600;
+    final m = (totalSeconds % 3600) ~/ 60;
+    if (h > 0) return '${h}h${m.toString().padLeft(2, '0')}';
+    return '${m}min';
   }
 
   void _openRobot(models.Document doc) {
@@ -105,37 +143,106 @@ class _MyRobotsScreenState extends State<MyRobotsScreen> {
             letterSpacing: 2, fontSize: 15)),
         actions: [
           IconButton(icon: const Icon(Icons.help_outline, color: Colors.white54, size: 20), onPressed: () => _tutorialKey.currentState?.show()),
+          // Accès à la carte des pompes — uniquement pertinent sur la
+          // catégorie Pompes, pas de sens pour les BZLight.
+          if (_selectedCategory == 1)
+            IconButton(
+              icon: const Icon(Icons.map_outlined, color: Colors.white54, size: 20),
+              onPressed: () => Navigator.push(context, MaterialPageRoute(
+                builder: (_) => const PumpMapScreen()))),
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white54),
-            onPressed: _loadRobots),
+            onPressed: _selectedCategory == 0 ? _loadRobots : _loadPumps),
           const LangSelector(), const SizedBox(width: 8),
         ],
       ),
-      body: BzTutorial(key: _tutorialKey, tutorialKey: 'bzlight_my_robots', steps: _tutorialSteps, child: _loading
-        ? const Center(child: CircularProgressIndicator(color: Color(0xFFEAB308)))
-        : _list.isEmpty
-          ? _buildEmpty()
-          : RefreshIndicator(
-              onRefresh: _loadRobots,
-              color: const Color(0xFFEAB308),
-              child: ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: _list.length,
-                itemBuilder: (_, i) => _buildRobotCard(_list[i]),
+      body: BzTutorial(key: _tutorialKey, tutorialKey: 'bzlight_my_robots', steps: _tutorialSteps,
+        child: Column(children: [
+          // ── Menu déroulant BZLight / Pompes ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0A0A0F),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFEAB308).withOpacity(0.25))),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<int>(
+                  value: _selectedCategory,
+                  isExpanded: true,
+                  dropdownColor: const Color(0xFF12121A),
+                  icon: const Icon(Icons.keyboard_arrow_down, color: Color(0xFFEAB308)),
+                  style: const TextStyle(color: Colors.white,
+                    fontWeight: FontWeight.w900, fontSize: 13, letterSpacing: 1),
+                  onChanged: (value) {
+                    if (value != null) setState(() => _selectedCategory = value);
+                  },
+                  items: [
+                    DropdownMenuItem(value: 0, child: Row(children: [
+                      const Icon(Icons.lightbulb_outline, color: Color(0xFFEAB308), size: 16),
+                      const SizedBox(width: 10),
+                      Text(_lang.t('myRobotsTabBzlight')),
+                    ])),
+                    DropdownMenuItem(value: 1, child: Row(children: [
+                      const Icon(Icons.water_drop_outlined, color: Color(0xFFEAB308), size: 16),
+                      const SizedBox(width: 10),
+                      Text(_lang.t('myRobotsTabPumps')),
+                    ])),
+                  ],
+                ),
               ),
-            )),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          await Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const BzLightScreen()));
-          _loadRobots();
-        },
-        backgroundColor: const Color(0xFFEAB308),
-        foregroundColor: Colors.black,
-        icon: const Icon(Icons.add),
-        label: Text(_lang.t('addRobotBtn'),
-        style: const TextStyle(fontWeight: FontWeight.w700)),
+            ),
+          ),
+          // ── Contenu selon la sélection ──
+          Expanded(
+            child: _selectedCategory == 0
+              ? (_loading
+                  ? const Center(child: CircularProgressIndicator(color: Color(0xFFEAB308)))
+                  : _list.isEmpty
+                    ? _buildEmpty()
+                    : RefreshIndicator(
+                        onRefresh: _loadRobots,
+                        color: const Color(0xFFEAB308),
+                        child: ListView.builder(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: _list.length,
+                          itemBuilder: (_, i) => _buildRobotCard(_list[i]),
+                        ),
+                      ))
+              : (_pumpsLoading
+                  ? const Center(child: CircularProgressIndicator(color: Color(0xFFEAB308)))
+                  : _pumps.isEmpty
+                    ? _buildPumpsEmpty()
+                    : RefreshIndicator(
+                        onRefresh: _loadPumps,
+                        color: const Color(0xFFEAB308),
+                        child: ListView.builder(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: _pumps.length,
+                          itemBuilder: (_, i) => _buildPumpCard(_pumps[i]),
+                        ),
+                      )),
+          ),
+        ]),
       ),
+      // Le bouton "+" ne concerne que les BZLight — les pompes se
+      // découvrent automatiquement à la connexion, rien à ajouter
+      // manuellement (voir pump_control_screen.dart).
+      floatingActionButton: _selectedCategory == 0
+        ? FloatingActionButton.extended(
+            onPressed: () async {
+              await Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const BzLightScreen()));
+              _loadRobots();
+            },
+            backgroundColor: const Color(0xFFEAB308),
+            foregroundColor: Colors.black,
+            icon: const Icon(Icons.add),
+            label: Text(_lang.t('addRobotBtn'),
+            style: const TextStyle(fontWeight: FontWeight.w700)),
+          )
+        : null,
     );
   }
 
@@ -220,6 +327,82 @@ class _MyRobotsScreenState extends State<MyRobotsScreen> {
               borderRadius: BorderRadius.circular(8)),
             child: const Icon(Icons.chevron_right,
               color: Color(0xFFEAB308), size: 18)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildPumpsEmpty() {
+    return Center(
+      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Container(
+          width: 80, height: 80,
+          decoration: BoxDecoration(
+            color: const Color(0xFFEAB308).withOpacity(0.1),
+            shape: BoxShape.circle,
+            border: Border.all(color: const Color(0xFFEAB308).withOpacity(0.2))),
+          child: Icon(Icons.water_drop_outlined,
+            color: const Color(0xFFEAB308).withOpacity(0.5), size: 40)),
+        const SizedBox(height: 20),
+        Text(_lang.t('myRobotsNoPumpTitle'),
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)),
+        const SizedBox(height: 8),
+        Text(_lang.t('myRobotsNoPumpSubtitle'),
+          style: TextStyle(color: Colors.grey[600], fontSize: 12),
+          textAlign: TextAlign.center),
+        const SizedBox(height: 80),
+      ]),
+    );
+  }
+
+  Widget _buildPumpCard(models.Document pump) {
+    final name = pump.data['name'] as String? ?? pump.$id;
+    // ⚠️ TEST UNIQUEMENT — voir pump_fake_data.dart. Le nom et l'ID
+    // restent réels (navigation vers le détail toujours correcte),
+    // seul le temps affiché ici est fictif, pour rester cohérent avec
+    // pump_detail_screen.dart tant que le mode test est actif.
+    final totalSeconds = PumpFakeData.enabled
+      ? PumpFakeData.totalSeconds()
+      : (pump.data['totalRuntimeSeconds'] as num?)?.toInt() ?? 0;
+
+    return GestureDetector(
+      onTap: () => Navigator.push(context, MaterialPageRoute(
+        builder: (_) => PumpDetailScreen(pumpId: pump.$id, pumpName: name)))
+        .then((_) => _loadPumps()),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0A0A0F),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: const Color(0xFFEAB308).withOpacity(0.25)),
+          boxShadow: [BoxShadow(
+            color: const Color(0xFFEAB308).withOpacity(0.06), blurRadius: 16)],
+        ),
+        child: Row(children: [
+          Container(
+            width: 52, height: 52,
+            decoration: BoxDecoration(
+              color: const Color(0xFFEAB308).withOpacity(0.1),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFEAB308).withOpacity(0.3))),
+            child: Icon(Icons.water_drop, color: const Color(0xFFEAB308), size: 26)),
+          const SizedBox(width: 14),
+          Expanded(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(name, style: const TextStyle(color: Colors.white,
+                fontWeight: FontWeight.w800, fontSize: 15)),
+              const SizedBox(height: 4),
+              Row(children: [
+                Icon(Icons.schedule, color: Colors.grey[600], size: 12),
+                const SizedBox(width: 4),
+                Text('${_lang.t('myRobotsPumpTotalTimePrefix')} ${_formatPumpDuration(totalSeconds)}',
+                  style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+              ]),
+            ],
+          )),
+          Icon(Icons.chevron_right, color: Colors.grey[600], size: 20),
         ]),
       ),
     );

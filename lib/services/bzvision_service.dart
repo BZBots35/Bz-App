@@ -18,7 +18,20 @@ class BzVisionService {
   // À créer dans la console Appwrite avec les attributs :
   //   canalisationID (string), chantierID (string), fileId (string),
   //   filename (string), date (string), userID (string)
+  // ⚠️ NOUVEAU : attribut optionnel `passNum` (string) à ajouter sur
+  // cette collection — sert à savoir quelle passe (pump_operation_screen)
+  // correspond à quelle vidéo, quand une canalisation a plusieurs passes.
   static const String canalisationVideosTable = 'canalisation_videos';
+  // Anomalies signalées vocalement pendant une inspection BzVision —
+  // uniquement le texte transcrit (pas l'audio original, par choix).
+  // ⚠️ Best-effort comme le reste de ce service (pas de file d'attente
+  // hors-ligne ici, contrairement à PumpService) : une anomalie notée
+  // sans réseau sera perdue si l'écriture échoue. À faire évoluer plus
+  // tard si besoin d'une vraie robustesse hors-ligne.
+  // ⚠️ À CRÉER dans la console Appwrite : collection `canalisation_anomalies`
+  // avec les attributs : canalisationID (string), chantierID (string),
+  // text (string), timestamp (string), userID (string).
+  static const String anomaliesTable = 'canalisation_anomalies';
 
   late Client    _client;
   late Databases _db;
@@ -179,6 +192,40 @@ class BzVisionService {
       });
   }
 
+  // ── Anomalies vocales ──────────────────────────
+  Future<models.Document?> createAnomaly({
+    required String canalisationId,
+    required String chantierId,
+    required String text,
+    required String userId,
+  }) async {
+    try {
+      return await _db.createDocument(
+        databaseId: databaseId, collectionId: anomaliesTable,
+        documentId: ID.unique(),
+        data: {
+          'canalisationID': canalisationId,
+          'chantierID': chantierId,
+          'text': text,
+          'timestamp': DateTime.now().toIso8601String(),
+          'userID': userId,
+        });
+    } catch (e) {
+      return null;
+    }
+  }
+
+  Future<List<models.Document>> getAnomalies(String canalisationId) async {
+    try {
+      final result = await _db.listDocuments(
+        databaseId: databaseId, collectionId: anomaliesTable,
+        queries: [Query.equal('canalisationID', canalisationId)]);
+      return result.documents;
+    } catch (e) {
+      return [];
+    }
+  }
+
   Future<void> deleteInspection(String docId) async {
     await _db.deleteDocument(databaseId: databaseId,
       collectionId: inspectionsTable, documentId: docId);
@@ -300,11 +347,14 @@ class BzVisionService {
   // vidéo enregistrée depuis BzVisionCameraScreen apparaisse rattachée
   // à sa canalisation, exactement comme une inspection.
 
-  Future<List<models.Document>> getVideosForCanalisation(String canalisationId) async {
+  Future<List<models.Document>> getVideosForCanalisation(
+      String canalisationId, {String? passNum}) async {
     try {
+      final queries = [Query.equal('canalisationID', canalisationId)];
+      if (passNum != null) queries.add(Query.equal('passNum', passNum));
       final result = await _db.listDocuments(
         databaseId: databaseId, collectionId: canalisationVideosTable,
-        queries: [Query.equal('canalisationID', canalisationId)]);
+        queries: queries);
       return result.documents;
     } catch (e) { return []; }
   }
@@ -316,6 +366,12 @@ class BzVisionService {
     required String filename,
     required String date,
     required String userId,
+    // Optionnel : numéro de passe pour laquelle cette vidéo a été
+    // filmée, quand la vidéo est prise depuis pump_operation_screen
+    // (une canalisation "pompe" peut avoir plusieurs passes, chacune
+    // avec sa propre vidéo d'inspection). Reste null pour une vidéo
+    // BzVision classique (une seule inspection par canalisation).
+    String? passNum,
   }) async {
     try {
       return await _db.createDocument(
@@ -325,6 +381,7 @@ class BzVisionService {
           'canalisationID': canalisationId, 'chantierID': chantierId,
           'fileId': fileId, 'filename': filename,
           'date': date, 'userID': userId,
+          if (passNum != null) 'passNum': passNum,
         });
     } catch (e) { return null; }
   }

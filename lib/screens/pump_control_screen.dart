@@ -9,6 +9,9 @@ import 'package:appwrite/models.dart' as models;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:gal/gal.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../services/auth_service.dart';
 import 'pump_debug_screen.dart';
 import '../services/lang_service.dart';
 import '../services/pump_service.dart';
@@ -58,6 +61,34 @@ class _PumpControlScreenState extends State<PumpControlScreen>
 
   final _lang = LangService();
   final _pumpService = PumpService();
+  final _auth = AuthService();
+  // Entreprise de l'utilisateur courant, récupérée une seule fois et
+  // mise en cache — utilisée pour cloisonner les pompes/positions par
+  // entreprise (voir PumpService.listPumps/getAllPumpLocations).
+  String? _company;
+
+  Future<String> _getCompany() async {
+    if (_company != null) return _company!;
+    try {
+      final user = await _auth.getCurrentUser();
+      if (user != null) {
+        _company = await _auth.getUserCompany(user.$id);
+      }
+    } catch (e) {
+      print('[PumpControlScreen] Impossible de récupérer l\'entreprise : $e');
+    }
+    return _company ?? '';
+  }
+
+  // Identifiant de la pompe physique pilotée par cet écran — récupéré
+  // dynamiquement depuis /telemetry (champ pump_id, numéro de série
+  // matériel de la Pi, voir pi_pump_server.py). Découverte automatique
+  // dans Appwrite dès qu'on le connaît (voir _fetchTelemetry). Toutes
+  // les pompes ont la même IP fixe (10.42.0.1 sur leur propre hotspot)
+  // donc cet ID — pas l'IP — est ce qui les distingue vraiment.
+  String? _pumpId;
+  DateTime? _pumpRunStartedAt;
+  double  _resinAtPumpStart = 0;
 
   // Débit max réglable (slider + champ texte + calcul PWM) — une seule
   // source de vérité, à changer ici si jamais la plage doit évoluer.
@@ -99,6 +130,142 @@ class _PumpControlScreenState extends State<PumpControlScreen>
       // 4. Si le téléphone ne trouve pas le Pi, c'est ici que ça s'affiche
       print("Erreur de connexion (Check l'IP piBase) : $e");
     }
+  }
+
+  // ── Temps de fonctionnement cumulé (Appwrite) ──
+  // Purement local à l'app : on chronomètre entre le moment où
+  // _isPumpOn passe à true et celui où il repasse à false, peu importe
+  // par quel chemin (bouton principal, fin de passe automatique, arrêt
+  // niveau bas...). Appelés depuis TOUS les endroits qui changent
+  // _isPumpOn, pas seulement _togglePump(), pour ne jamais rater une
+  // session.
+  // ── Géolocalisation (GPS du téléphone — indépendant du hotspot/
+  // internet, fonctionne même sur le réseau isolé de la pompe) ──
+  // Capturée une fois par connexion (même moment que la découverte de
+  // pompe), jamais en continu — pas besoin de suivre le mouvement du
+  // téléphone en direct, juste de savoir où était la pompe à ce moment.
+  // Un CONSENTEMENT EXPLICITE est demandé la première fois, et son
+  // choix mémorisé — jamais de capture silencieuse sans accord.
+  static const _kLocationConsentKey = 'pump_location_consent_given';
+  static const _kLocationConsentDeclinedKey = 'pump_location_consent_declined';
+
+  Future<bool> _hasLocationConsent() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool(_kLocationConsentKey) == true) return true;
+    if (prefs.getBool(_kLocationConsentDeclinedKey) == true) return false;
+
+    // Jamais demandé — on affiche le dialogue une seule fois, son choix
+    // est ensuite mémorisé durablement (pas redemandé à chaque connexion).
+    if (!mounted) return false;
+    final accepted = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0D0D0D),
+        title: Text(_lang.t('pumpLocationConsentTitle'),
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+        content: Text(_lang.t('pumpLocationConsentBody'),
+          style: const TextStyle(color: Colors.white70, fontSize: 13)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(_lang.t('pumpLocationConsentDecline'),
+              style: const TextStyle(color: Colors.grey))),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF22D3EE)),
+            child: Text(_lang.t('pumpLocationConsentAccept'),
+              style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900))),
+        ],
+      ),
+    );
+
+    await prefs.setBool(
+      accepted == true ? _kLocationConsentKey : _kLocationConsentDeclinedKey,
+      true);
+    return accepted == true;
+  }
+
+  Future<void> _capturePumpLocation(String pumpId, String company) async {
+    print('[GPS] _capturePumpLocation démarré pour $pumpId');
+    try {
+      final consent = await _hasLocationConsent();
+      print('[GPS] Consentement : $consent');
+      if (!consent) return;
+
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      print('[GPS] Service de localisation activé : $serviceEnabled');
+      if (!serviceEnabled) return;
+
+      var permission = await Geolocator.checkPermission();
+      print('[GPS] Permission actuelle : $permission');
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        print('[GPS] Permission après demande : $permission');
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        print('[GPS] Permission refusée, arrêt');
+        return; // pas de permission — on ne bloque rien, juste pas de position cette fois
+      }
+
+      print('[GPS] Démarrage getCurrentPosition...');
+      // Fonctionne sans internet : la puce GPS capte les satellites
+      // directement, l'assistance réseau accélère juste le premier fix.
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 30),
+        ),
+      );
+      print('[GPS] Position obtenue : ${position.latitude}, ${position.longitude}');
+
+      await _pumpService.recordPumpLocation(
+        pumpId: pumpId,
+        company: company,
+        lat: position.latitude,
+        lng: position.longitude,
+        capturedAt: DateTime.now(),
+      );
+      print('[GPS] recordPumpLocation appelé avec succès');
+    } catch (e) {
+      print('[PumpControlScreen] Capture GPS échouée : $e');
+      // Best-effort — une position ratée n'empêche jamais de piloter la pompe.
+    }
+  }
+
+  void _markPumpStarted() {
+    _pumpRunStartedAt = DateTime.now();
+    _resinAtPumpStart = _resinConso;
+  }
+
+  void _markPumpStoppedAndRecordRuntime() {
+    final startedAt = _pumpRunStartedAt;
+    _pumpRunStartedAt = null;
+    if (startedAt == null) return;
+    final elapsedSeconds = DateTime.now().difference(startedAt).inSeconds;
+    final resinUsedThisSession =
+        (_resinConso - _resinAtPumpStart).clamp(0, double.infinity);
+    final pumpId = _pumpId;
+    // Pas encore d'ID pompe connu (pas de télémétrie reçue avant cette
+    // session) : rien à rattacher, mais on ne fait pas planter l'arrêt
+    // de la pompe pour autant.
+    if (pumpId == null) return;
+    // Best-effort, ne bloque jamais l'arrêt de la pompe elle-même —
+    // mis en file d'attente hors-ligne automatiquement si besoin (voir
+    // PumpService.recordPumpSession).
+    _getCompany().then((company) {
+      _pumpService.recordPumpSession(
+        pumpId: pumpId,
+        company: company,
+        startedAt: startedAt,
+        durationSeconds: elapsedSeconds,
+        resinUsedL: resinUsedThisSession.toDouble(),
+        chantierId: widget.chantierDoc.$id,
+        canalisationId: widget.canalisationDoc.$id,
+        userId: widget.userName,
+      );
+    });
   }
 
   // ── Vidéo timelapse (Pi caméra dédiée, même IP que la pompe, port 5002) ──
@@ -278,6 +445,22 @@ class _PumpControlScreenState extends State<PumpControlScreen>
           _piConnected = true;
           // État séparé : est-ce que l'Arduino transmet des données fraîches ?
           _arduinoConnected = data['connected'] == true;
+
+          // Identifiant de pompe (numéro de série Pi) — dès qu'on le
+          // découvre (ou qu'il change, ex: reconnexion à une autre
+          // pompe), on déclenche la découverte/création automatique
+          // côté Appwrite ET une capture de position GPS (voir
+          // _capturePumpLocation). Fire-and-forget : ne bloque jamais l'UI.
+          final newPumpId = data['pump_id'] as String?;
+          if (newPumpId != null && newPumpId != 'unknown' && newPumpId != _pumpId) {
+            print('[GPS] Nouveau pump_id détecté : $newPumpId (ancien : $_pumpId)');
+            _pumpId = newPumpId;
+            _getCompany().then((company) {
+              print('[GPS] Company récupérée : "$company"');
+              _pumpService.getOrCreatePump(newPumpId, company);
+              _capturePumpLocation(newPumpId, company);
+            });
+          }
 
           // Charges moteurs (courant) — Moteur A = moteur 1, Moteur B = moteur 2
           _consoMoteurA = (data['charge1'] as num?)?.toDouble() ?? _consoMoteurA;
@@ -648,6 +831,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
           // Passe terminée automatiquement
           if (_metersLeft <= 0.001) {
             _isPumpOn = false;
+            _markPumpStoppedAndRecordRuntime();
             _sendCmd('SPEED12=0');
             _sendCmd('DEBIT_CIBLE=0');
             if (_videoRecording) {
@@ -656,6 +840,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
             }
             _timer?.cancel();
             _savePassCurve();
+            _savePassTimestamp();
             _saveRealResinTotal();
             _showPasseTermineeDialog();
           }
@@ -701,6 +886,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
   setState(() => _isPumpOn = !_isPumpOn);
   
   if (_isPumpOn) {
+    _markPumpStarted();
     // 1. On envoie l'ordre de démarrage (START)
     _sendCmd('START');
     // 2. On envoie la vitesse et la consigne de débit juste après
@@ -717,6 +903,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
       _startVideoRecording();
     }
   } else {
+    _markPumpStoppedAndRecordRuntime();
     // 1. On envoie l'ordre d'arrêt (STOP)
     _sendCmd('STOP');
   }
@@ -854,6 +1041,28 @@ class _PumpControlScreenState extends State<PumpControlScreen>
       await _pumpService.updateCanalisation(
         widget.canalisationDoc.$id,
         passesData: json.encode(passesData),
+      );
+    } catch (_) {
+      // Échec silencieux volontaire — voir commentaire ci-dessus.
+    }
+  }
+
+  // Sauvegarde la date/heure de fin de cette passe, fusionnée avec
+  // celles des autres passes déjà enregistrées — même logique et même
+  // tolérance à l'échec que _savePassCurve (le rapport PDF affichera
+  // juste "—" pour une passe sans horodatage plutôt que de bloquer
+  // quoi que ce soit ici).
+  Future<void> _savePassTimestamp() async {
+    try {
+      Map<String, dynamic> passesTimestamps = {};
+      final raw = widget.canalisationDoc.data['passesTimestamps'] as String?;
+      if (raw != null && raw.isNotEmpty) {
+        passesTimestamps = Map<String, dynamic>.from(json.decode(raw));
+      }
+      passesTimestamps['${widget.passNum}'] = DateTime.now().toIso8601String();
+      await _pumpService.updateCanalisation(
+        widget.canalisationDoc.$id,
+        passesTimestamps: json.encode(passesTimestamps),
       );
     } catch (_) {
       // Échec silencieux volontaire — voir commentaire ci-dessus.
@@ -1122,6 +1331,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
             if (secondsLeft <= 0) {
               t.cancel();
               _sendCmd('STOP');
+              _markPumpStoppedAndRecordRuntime();
               if (mounted) setState(() => _isPumpOn = false);
               _lowLevelDialogOpen = false;
               if (Navigator.of(dialogContext).canPop()) {
@@ -1171,6 +1381,7 @@ class _PumpControlScreenState extends State<PumpControlScreen>
                 onPressed: () {
                   countdownTimer?.cancel();
                   _sendCmd('STOP');
+                  _markPumpStoppedAndRecordRuntime();
                   if (mounted) setState(() => _isPumpOn = false);
                   _lowLevelDialogOpen = false;
                   Navigator.of(dialogContext).pop();
@@ -1332,32 +1543,38 @@ class _PumpControlScreenState extends State<PumpControlScreen>
             icon: const Icon(Icons.chevron_left, color: Colors.white, size: 28),
             onPressed: _confirmExit),
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Text('${_lang.t('pumpPassLabel')} ',
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 14)),
-            Text('N°${widget.passNum}',
-                style: const TextStyle(
-                    color: Color(0xFF22D3EE),
-                    fontWeight: FontWeight.w900,
-                    fontSize: 14)),
-            Text(' / ${widget.passes}',
-                style: TextStyle(
-                    color: Colors.grey[600],
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12)),
-          ]),
-          Row(children: [
-            _headerBadge('DN${_diametre.toInt()}',
-                const Color(0xFF22D3EE)),
-            const SizedBox(width: 6),
-            _headerBadge(resinName, Colors.white),
-            const SizedBox(width: 6),
-            _headerBadge('#${widget.canalisationDoc.data['label'] ?? '—'}',
-                Colors.purple),
-          ]),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              Text('${_lang.t('pumpPassLabel')} ',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 14)),
+              Text('N°${widget.passNum}',
+                  style: const TextStyle(
+                      color: Color(0xFF22D3EE),
+                      fontWeight: FontWeight.w900,
+                      fontSize: 14)),
+              Text(' / ${widget.passes}',
+                  style: TextStyle(
+                      color: Colors.grey[600],
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12)),
+            ]),
+          ),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              _headerBadge('DN${_diametre.toInt()}',
+                  const Color(0xFF22D3EE)),
+              const SizedBox(width: 6),
+              _headerBadge(resinName, Colors.white),
+              const SizedBox(width: 6),
+              _headerBadge('#${widget.canalisationDoc.data['label'] ?? '—'}',
+                  Colors.purple),
+            ]),
+          ),
         ]),
         actions: [
           IconButton(

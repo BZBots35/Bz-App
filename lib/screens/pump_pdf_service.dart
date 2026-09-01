@@ -86,8 +86,9 @@ class PumpPdfService {
     List<dynamic> rawPoints,
     double targetEpaisseur,
     pw.Font font,
-    pw.Font bold,
-  ) {
+    pw.Font bold, {
+    String? timestampLabel,
+  }) {
     if (rawPoints.length < 2) return pw.SizedBox();
 
     final pts = rawPoints
@@ -121,8 +122,16 @@ class PumpPdfService {
       child: pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
-          pw.Text(passLabel,
-              style: pw.TextStyle(font: bold, fontSize: 9, color: _dark)),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              pw.Text(passLabel,
+                  style: pw.TextStyle(font: bold, fontSize: 9, color: _dark)),
+              if (timestampLabel != null)
+                pw.Text(timestampLabel,
+                    style: pw.TextStyle(font: font, fontSize: 7.5, color: _grey)),
+            ],
+          ),
           pw.SizedBox(height: 6),
           pw.Stack(
             children: [
@@ -232,7 +241,8 @@ class PumpPdfService {
     );
   }
 
-  pw.Widget _thicknessSection(String? passesDataJson, double targetEpaisseur, pw.Font font, pw.Font bold) {
+  pw.Widget _thicknessSection(String? passesDataJson, double targetEpaisseur,
+      pw.Font font, pw.Font bold, {String? passesTimestampsJson}) {
     if (passesDataJson == null || passesDataJson.isEmpty) return pw.SizedBox();
     Map<String, dynamic> passesData;
     try {
@@ -242,6 +252,15 @@ class PumpPdfService {
     }
     if (passesData.isEmpty) return pw.SizedBox();
 
+    Map<String, dynamic> passesTimestamps = {};
+    if (passesTimestampsJson != null && passesTimestampsJson.isNotEmpty) {
+      try {
+        passesTimestamps = Map<String, dynamic>.from(jsonDecode(passesTimestampsJson));
+      } catch (_) {
+        // Pas bloquant : le rapport s'affiche simplement sans date/heure.
+      }
+    }
+
     final sortedKeys = passesData.keys.toList()
       ..sort((a, b) => (int.tryParse(a) ?? 0).compareTo(int.tryParse(b) ?? 0));
 
@@ -249,8 +268,17 @@ class PumpPdfService {
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
         _sectionTitle('Épaisseur appliquée mesurée', _cyan, bold),
-        ...sortedKeys.map((k) => _thicknessChart(
-              'Passe N°$k', passesData[k] as List, targetEpaisseur, font, bold)),
+        ...sortedKeys.map((k) {
+          final raw = passesTimestamps[k] as String?;
+          final dt = raw != null ? DateTime.tryParse(raw) : null;
+          final tsLabel = dt == null ? null :
+            '${dt.day.toString().padLeft(2, '0')}/'
+            '${dt.month.toString().padLeft(2, '0')}/${dt.year} à '
+            '${dt.hour.toString().padLeft(2, '0')}:'
+            '${dt.minute.toString().padLeft(2, '0')}';
+          return _thicknessChart('Passe N°$k', passesData[k] as List,
+              targetEpaisseur, font, bold, timestampLabel: tsLabel);
+        }),
       ],
     );
   }
@@ -285,6 +313,7 @@ class PumpPdfService {
     final dia   = double.tryParse(d['diametre'] as String? ?? '100') ?? 100;
     final passes = d['passes'] as int? ?? 4;
     final passesDataJson = d['passesData'] as String?;
+    final passesTimestampsJson = d['passesTimestamps'] as String?;
     final resinAppliedRaw = d['resinAppliedTotal'];
     final resinApplied = resinAppliedRaw != null ? (resinAppliedRaw as num).toDouble() : null;
     final resin  = calcResin(lon, dia, passes);
@@ -298,8 +327,6 @@ class PumpPdfService {
     final resinName = resinType == 'spraycoat_plus' ? 'Spraycoat+' : 'Spraycoat Flex';
     final ref    = _rapportRef(ch['nom'] ?? 'CH');
     final date   = _dateStr();
-    final tempExt = ch['tempExt'] as String? ?? 'Non renseignée';
-    final meteo   = ch['meteo'] as String? ?? 'Non renseignées';
 
     pdf.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
@@ -378,8 +405,6 @@ class PumpPdfService {
                 _infoRow('Nom', ch['nom'] ?? '—', font, bold),
                 _infoRow('Adresse', '${ch['rue'] ?? ''} ${ch['ville'] ?? ''}', font, bold),
                 _infoRow('Opérateur', operateur, font, bold),
-                _infoRow('Température ext.', tempExt, font, bold),
-                _infoRow('Conditions météo', meteo, font, bold),
               ]),
             ),
           ])),
@@ -419,7 +444,8 @@ class PumpPdfService {
         ],
 
         // Courbes d'épaisseur
-        _thicknessSection(passesDataJson, epaisseur, font, bold),
+        _thicknessSection(passesDataJson, epaisseur, font, bold,
+            passesTimestampsJson: passesTimestampsJson),
 
         pw.SizedBox(height: 14),
         // Signatures
@@ -490,8 +516,6 @@ class PumpPdfService {
     final mins     = (timeMins % 60).floor();
     final timeStr  = hrs > 0 ? '${hrs}h ${mins}min' : '${mins}min';
     final pctDone  = canalisations.isEmpty ? 0.0 : (terminees / canalisations.length * 100);
-    final tempExt = ch['tempExt'] as String? ?? 'Non renseignée';
-    final meteo   = ch['meteo'] as String? ?? 'Non renseignées';
     
     pdf.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
@@ -542,8 +566,6 @@ class PumpPdfService {
                 _infoRow('Nom', ch['nom'] ?? '—', font, bold),
                 _infoRow('Ville', ch['ville'] ?? '—', font, bold),
                 _infoRow('Opérateur', operateur, font, bold),
-                _infoRow('Température ext.', tempExt, font, bold),
-                _infoRow('Conditions météo', meteo, font, bold),
               ]),
             ),
           ])),

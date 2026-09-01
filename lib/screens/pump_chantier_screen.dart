@@ -329,9 +329,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
                   color: const Color(0xFF22D3EE),
                   child: SingleChildScrollView(
                     child: Column(children: [
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: _buildTable()),
+                      _buildTable(),
                       _buildTotaux(),
                       const SizedBox(height: 80),
                     ]),
@@ -599,140 +597,165 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
   }
 
   Widget _buildTable() {
-    return DataTable(
-      headingRowColor: WidgetStateProperty.all(const Color(0xFF0D0D0D)),
-      dataRowColor: WidgetStateProperty.resolveWith((_) =>
-        const Color(0xFF050505)),
-      border: TableBorder(horizontalInside: BorderSide(
-        color: Colors.white.withOpacity(0.04))),
-      columnSpacing: 14,
-      headingRowHeight: 32,
-      dataRowMinHeight: 52,
-      dataRowMaxHeight: 64,
-      columns: _buildColumns(),
-      rows: _canalisations.asMap().entries.map((e) =>
-        _buildRow(e.key, e.value)).toList(),
+    return Column(children: [
+      _buildTableColumnHeader(),
+      ..._canalisations.asMap().entries.map((e) =>
+        _buildRow(e.key, e.value)),
+    ]);
+  }
+
+  Widget _buildTableColumnHeader() {
+    final s = TextStyle(color: Colors.grey[500], fontSize: 8,
+      fontWeight: FontWeight.w900, letterSpacing: 1);
+    return Container(
+      color: const Color(0xFF0D0D0D),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: Row(children: [
+        const SizedBox(width: 14),
+        Expanded(flex: 3, child: Text(_lang.t('pumpChantierColLabel'), style: s)),
+        Expanded(flex: 2, child: Text(_lang.t('pumpChantierColLong'), style: s)),
+        Expanded(flex: 2, child: Text('Ø', style: s)),
+        const SizedBox(width: 60),
+      ]),
     );
   }
 
-  List<DataColumn> _buildColumns() {
-    final s = TextStyle(color: Colors.grey[500], fontSize: 9,
-      fontWeight: FontWeight.w900, letterSpacing: 1.5);
-    return [
-      DataColumn(label: Text('#', style: s)),
-      DataColumn(label: Text(_lang.t('pumpChantierColLabel'), style: s)),
-      DataColumn(label: Text(_lang.t('pumpChantierColLong'), style: s)),
-      DataColumn(label: Text('Ø (mm)', style: s)),
-      DataColumn(label: Text(_lang.t('pumpChantierColPasses'), style: s)),
-      DataColumn(label: Text(_lang.t('pumpChantierColResine'), style: s)),
-      DataColumn(label: Text(_lang.t('pumpChantierColAction'), style: s)),
-    ];
-  }
-
-  DataRow _buildRow(int idx, models.Document doc) {
+  Widget _buildRow(int idx, models.Document doc) {
     final d      = doc.data;
     final label  = d['label']    as String? ?? '';
     final lonStr = d['longueur'] as String? ?? '0';
     final diaStr = d['diametre'] as String? ?? '100';
-    final passes = d['passes']   as int?    ?? _desiredPasses;
     final statut = d['statut']   as String? ?? 'en_attente';
-    final lon    = double.tryParse(lonStr) ?? 0;
-    final dia    = double.tryParse(diaStr) ?? 100;
-    final resin  = _calcResin(lon, dia, passes);
-    final partA  = resin * (2/3);
-    final partB  = resin * (1/3);
     final isDone = statut == 'termine';
+    final neon = _statutNeonColor(statut);
 
-    return DataRow(cells: [
-      DataCell(Text('${idx + 1}', style: TextStyle(
-        color: Colors.grey[600], fontSize: 11))),
-      DataCell(SizedBox(width: 100, child: Text(label,
-        style: const TextStyle(color: Colors.white,
-          fontSize: 12, fontWeight: FontWeight.w700),
-        overflow: TextOverflow.ellipsis))),
-      DataCell(Text(lonStr, style: TextStyle(
-        color: Colors.grey[400], fontSize: 11))),
-      DataCell(Text('DN$diaStr', style: TextStyle(
-        color: Colors.grey[400], fontSize: 11))),
-      DataCell(Text('$passes', style: TextStyle(
-        color: passes != _desiredPasses
-          ? Colors.red : Colors.white,
-        fontSize: 12, fontWeight: FontWeight.w700))),
-      DataCell(Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('${resin.toStringAsFixed(2)} L',
-          style: const TextStyle(color: Colors.purple,
-            fontSize: 11, fontWeight: FontWeight.w700)),
-        Text('A:${partA.toStringAsFixed(2)} B:${partB.toStringAsFixed(2)}',
-          style: TextStyle(color: Colors.grey[600], fontSize: 8)),
-      ])),
-      DataCell(isDone
-        ? Column(mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 6, vertical: 3),
-              decoration: BoxDecoration(
-                color: Colors.green.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(6)),
-              child: Text('✓ ${_lang.t('pumpChantierDoneLabel')}',
-                style: const TextStyle(color: Colors.green,
-                  fontSize: 9, fontWeight: FontWeight.w900))),
-            const SizedBox(height: 3),
-            GestureDetector(
-              onTap: () => _generateRowReport(idx, doc),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 6, vertical: 3),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF050505),
+        border: Border(bottom: BorderSide(
+          color: Colors.white.withOpacity(0.04)))),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        Expanded(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: label.trim().isEmpty
+              ? () => ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(_lang.t('pumpChantierNameRequiredMsg')),
+                  backgroundColor: Colors.red,
+                  behavior: SnackBarBehavior.floating))
+              : () => _startOperation(idx, doc),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+              Container(
+                width: 8, height: 8,
+                margin: const EdgeInsets.only(right: 6),
                 decoration: BoxDecoration(
-                  color: Colors.blue.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(6)),
-                child: Text('📄 ${_lang.t('pumpChantierReportLabel')}',
-                  style: const TextStyle(color: Colors.blue,
-                    fontSize: 9, fontWeight: FontWeight.w900)))),
-          ])
-        : Row(children: [
-            GestureDetector(
-              onTap: () => _startOperation(idx, doc),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [
-                    Color(0xFF0891B2), Color(0xFF3B82F6)]),
-                  borderRadius: BorderRadius.circular(8),
+                  shape: BoxShape.circle,
+                  color: neon,
                   boxShadow: [BoxShadow(
-                    color: const Color(0xFF22D3EE).withOpacity(0.3),
-                    blurRadius: 8)]),
-                child: Text(
-                  statut == 'en_cours' ? '▶ ${_lang.t('pumpChantierContinueBtn')}' : '▶ ${_lang.t('pumpChantierStartBtn')}',
+                    color: neon.withOpacity(0.7), blurRadius: 4)])),
+              Expanded(flex: 3, child: Text(label.isEmpty ? '—' : label,
                   style: const TextStyle(color: Colors.white,
-                    fontSize: 9, fontWeight: FontWeight.w900)))),
-            const SizedBox(width: 4),
-            if (widget.userRole == AppRoles.superAdmin ||
-                widget.userRole == AppRoles.admin)
+                    fontSize: 12, fontWeight: FontWeight.w700),
+                  overflow: TextOverflow.ellipsis)),
+              Expanded(flex: 2, child: Text('${lonStr}m',
+                  style: TextStyle(color: Colors.grey[400], fontSize: 11))),
+              Expanded(flex: 2, child: Text('DN$diaStr',
+                  style: TextStyle(color: Colors.grey[400], fontSize: 11))),
+            ]),
+          ),
+        ),
+        SizedBox(width: 60, child: isDone
+          ? Row(mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                width: 24, height: 24,
+                decoration: BoxDecoration(
+                  color: Colors.green.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(6)),
+                child: const Icon(Icons.check,
+                  color: Colors.green, size: 14)),
+              const SizedBox(width: 4),
               GestureDetector(
-                onTap: () async {
-                  await _service.deleteCanalisation(doc.$id);
-                  _loadCanalisations();
-                },
+                onTap: () => _generateRowReport(idx, doc),
                 child: Container(
-                  width: 26, height: 26,
+                  width: 24, height: 24,
                   decoration: BoxDecoration(
-                    color: Colors.red.withOpacity(0.1),
+                    color: Colors.blue.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(6)),
-                  child: Icon(Icons.delete_outline,
-                    color: Colors.red[400], size: 13))),
-          ])),
-    ]);
+                  child: const Icon(Icons.picture_as_pdf,
+                    color: Colors.blue, size: 13))),
+            ])
+          : (widget.userRole == AppRoles.superAdmin ||
+              widget.userRole == AppRoles.admin)
+            ? Align(
+                alignment: Alignment.centerRight,
+                child: GestureDetector(
+                  onTap: () => _confirmDeleteCanalisation(doc, label),
+                  child: Container(
+                    width: 26, height: 26,
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(6)),
+                    child: Icon(Icons.delete_outline,
+                      color: Colors.red[400], size: 13))))
+            : null),
+      ]),
+    );
+  }
+
+  Future<void> _confirmDeleteCanalisation(
+      models.Document doc, String label) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF0D0D0D),
+        title: Text(_lang.t('pumpChantierDeleteCanaTitle'),
+          style: const TextStyle(color: Colors.white)),
+        content: Text(
+          label.trim().isEmpty
+            ? _lang.t('pumpChantierDeleteCanaConfirmMsg')
+            : '${_lang.t('pumpChantierDeleteCanaConfirmMsg')} ($label)',
+          style: const TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(_lang.t('pumpScreenCancelBtn'),
+              style: const TextStyle(color: Colors.grey))),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(_lang.t('pumpScreenDeleteBtn'),
+              style: const TextStyle(color: Colors.red))),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await _service.deleteCanalisation(doc.$id);
+      _loadCanalisations();
+    }
+  }
+
+  /// Code couleur néon par statut de canalisation, affiché en pastille
+  /// en début de ligne : pas commencée -> blanc, en cours -> jaune,
+  /// terminée -> vert, problème -> rouge (statut 'probleme' pas encore
+  /// déclenché nulle part pour l'instant — à câbler plus tard depuis
+  /// pump_operation_screen.dart).
+  Color _statutNeonColor(String statut) {
+    switch (statut) {
+      case 'en_cours':
+        return const Color(0xFFFFEE00);
+      case 'termine':
+        return const Color(0xFF39FF14);
+      case 'probleme':
+        return const Color(0xFFFF073A);
+      case 'en_attente':
+      default:
+        return Colors.white;
+    }
   }
 
   Widget _buildTotaux() {
     final totalLin  = _totalLinear;
     final totalRes  = _totalResin;
-    final partA     = totalRes * (2/3);
-    final partB     = totalRes * (1/3);
 
     return Container(
       margin: const EdgeInsets.all(16),
@@ -755,7 +778,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
               style: const TextStyle(color: Colors.white,
                 fontSize: 24, fontWeight: FontWeight.w900)),
             const Text(' m', style: TextStyle(
-              color: Color(0xFF22D3EE), fontSize: 14,
+              color: Colors.white, fontSize: 14,
               fontWeight: FontWeight.w700)),
           ]),
         ])),
@@ -774,9 +797,6 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
               color: Colors.purple, fontSize: 14,
               fontWeight: FontWeight.w700)),
           ]),
-          Text('A: ${partA.toStringAsFixed(2)} | B: ${partB.toStringAsFixed(2)}',
-            style: TextStyle(color: Colors.grey[500],
-              fontSize: 9, fontWeight: FontWeight.w700)),
         ])),
       ]),
     );
@@ -790,6 +810,7 @@ class _PumpChantierScreenState extends State<PumpChantierScreen> {
         epaisseur:       _epaisseur,
         resinType:       _resinType,
         userName:        widget.userName,
+        userId:          widget.userId,
       ))).then((_) => _loadCanalisations());
   }
 
@@ -843,6 +864,7 @@ class _AddCanalisationSheetState extends State<_AddCanalisationSheet> {
   final _lonCtrl   = TextEditingController(text: '10');
   final _diaCtrl   = TextEditingController(text: '100');
   late int _passes;
+  bool _showLabelError = false;
 
   @override
   void initState() { super.initState(); _passes = widget.defaultPasses; }
@@ -861,7 +883,21 @@ class _AddCanalisationSheetState extends State<_AddCanalisationSheet> {
           color: Colors.white, fontWeight: FontWeight.w900,
           fontSize: 13, letterSpacing: 2)),
         const SizedBox(height: 20),
-        _field(_labelCtrl, _lang.t('pumpChantierLabelOptionalHint'), Icons.label_outline),
+        _field(_labelCtrl, _lang.t('pumpChantierLabelRequiredHint'),
+          Icons.label_outline,
+          hasError: _showLabelError,
+          onChanged: (v) {
+            if (_showLabelError && v.trim().isNotEmpty) {
+              setState(() => _showLabelError = false);
+            }
+          }),
+        if (_showLabelError) ...[
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.only(left: 4),
+            child: Text(_lang.t('pumpChantierLabelRequiredError'),
+              style: const TextStyle(color: Colors.red, fontSize: 11))),
+        ],
         const SizedBox(height: 10),
         Row(children: [
           Expanded(child: _field(_lonCtrl, _lang.t('pumpChantierLongueurHint'),
@@ -903,6 +939,10 @@ class _AddCanalisationSheetState extends State<_AddCanalisationSheet> {
           width: double.infinity, height: 48,
           child: ElevatedButton(
             onPressed: () {
+              if (_labelCtrl.text.trim().isEmpty) {
+                setState(() => _showLabelError = true);
+                return;
+              }
               Navigator.pop(context, {
                 'label':    _labelCtrl.text.trim(),
                 'longueur': _lonCtrl.text.trim(),
@@ -925,27 +965,35 @@ class _AddCanalisationSheetState extends State<_AddCanalisationSheet> {
   }
 
   Widget _field(TextEditingController ctrl, String label, IconData icon,
-      {bool isNumeric = false}) {
+      {bool isNumeric = false, bool hasError = false,
+       ValueChanged<String>? onChanged}) {
+    final errorColor = Colors.red.withOpacity(0.6);
     return TextField(
       controller: ctrl,
+      onChanged: onChanged,
       keyboardType: isNumeric
         ? const TextInputType.numberWithOptions(decimal: true)
         : TextInputType.text,
       style: const TextStyle(color: Colors.white, fontSize: 13),
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: TextStyle(color: Colors.grey[500], fontSize: 12),
-        prefixIcon: Icon(icon, color: Colors.grey[600], size: 16),
+        labelStyle: TextStyle(
+          color: hasError ? Colors.red : Colors.grey[500], fontSize: 12),
+        prefixIcon: Icon(icon,
+          color: hasError ? Colors.red : Colors.grey[600], size: 16),
         filled: true, fillColor: Colors.black.withOpacity(0.4),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.white.withOpacity(0.08))),
+          borderSide: BorderSide(
+            color: hasError ? errorColor : Colors.white.withOpacity(0.08))),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.white.withOpacity(0.08))),
+          borderSide: BorderSide(
+            color: hasError ? errorColor : Colors.white.withOpacity(0.08))),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(
-            color: Color(0xFF22D3EE), width: 1.5))),
+          borderSide: BorderSide(
+            color: hasError ? errorColor : const Color(0xFF22D3EE),
+            width: 1.5))),
     );
   }
 }
